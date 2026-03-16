@@ -916,6 +916,7 @@ function buildMessagesForApi() {
   const log = readMemoryLog();
   const currentUserId = getCurrentUserId();
   const activeTask = readActiveTaskContext();
+  const startupName = getStartupName();
 
   const now = Date.now();
   const older = [];
@@ -943,6 +944,9 @@ function buildMessagesForApi() {
   if (user?.email) {
     sysParts.push(`signed in as: ${user.email}`);
   }
+  if (startupName) {
+    sysParts.push(`startup name: ${startupName}`);
+  }
   if (activeTask?.title) {
     sysParts.push(`active task the user is working on: ${activeTask.title}`);
   }
@@ -950,6 +954,9 @@ function buildMessagesForApi() {
     sysParts.push("memory (older context):\n" + memoryLines);
   }
   sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
+  sysParts.push("match the depth to the ask: casual when the user wants quick help, but go deep when they want to build, diagnose, or decide something important.");
+  sysParts.push("when going deep, think like a real cofounder: define the problem, state a point of view, show tradeoffs, and turn the answer into concrete priorities, experiments, or next moves.");
+  sysParts.push("for deeper business answers, naturally cover what is happening, what you recommend, and what the user should do next, but do not force obvious section labels unless they improve readability.");
 
   return [{ role: "system", content: sysParts.join("\n\n") }, ...conversation];
 }

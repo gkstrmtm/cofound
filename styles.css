@@ -773,9 +773,11 @@ button {
 
 .record-stack {
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
   bottom: 1.4rem;
-  transform: translateX(-50%);
+  width: max-content;
+  margin: 0 auto;
   z-index: 4;
   display: flex;
   flex-direction: column;
@@ -787,7 +789,7 @@ button {
 .app-frame.is-typing .record-stack {
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-50%) translateY(18px);
+  transform: translateY(18px);
 }
 
 .icon-button {
@@ -1075,14 +1077,20 @@ button {
   left: auto;
   bottom: auto;
   transform: none;
-  width: 60px;
-  height: 60px;
+  width: 74px;
+  height: 74px;
+  padding: 0;
   border-radius: 999px;
   background: transparent;
+  border: 0;
   box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
   display: grid;
   place-items: center;
   touch-action: manipulation;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .record-orb.listening .record-logo {
@@ -1146,15 +1154,7 @@ button {
 }
 
 .record-orb::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 92px;
-  height: 92px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: transparent;
+  content: none;
 }
 
 .record-orb.listening {
