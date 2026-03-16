@@ -67,6 +67,55 @@ let ttsQueue = [];
 let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
+let ttsNeedsUnlock = false;
+let audioUnlockAttempted = false;
+let audioCtx = null;
+
+const SILENT_WAV_DATA_URI =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+
+function unlockAudioFromGesture() {
+  if (audioUnlockAttempted) {
+    return;
+  }
+  audioUnlockAttempted = true;
+
+  // WebAudio resume (helps on iOS/Safari)
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) {
+      audioCtx = audioCtx || new Ctx();
+      audioCtx.resume?.();
+    }
+  } catch {
+    // ignore
+  }
+
+  // HTMLAudio unlock (also helps on mobile)
+  try {
+    const a = new Audio(SILENT_WAV_DATA_URI);
+    a.volume = 0;
+    const p = a.play();
+    if (p && p.catch) {
+      p.catch(() => {
+        // ignore
+      });
+    }
+    setTimeout(() => {
+      try {
+        a.pause();
+        a.src = "";
+      } catch {
+        // ignore
+      }
+    }, 60);
+  } catch {
+    // ignore
+  }
+
+  ttsNeedsUnlock = false;
+  playNextTts();
+}
 
 function getVoiceRepliesEnabled() {
   return (localStorage.getItem(STORAGE_KEYS.voiceReplies) || "true") === "true";
@@ -87,6 +136,7 @@ function stopAllTts() {
   ttsSessionId += 1;
   ttsQueue = [];
   ttsIsPlaying = false;
+  ttsNeedsUnlock = false;
 
   if (ttsCurrentAudio) {
     try {
@@ -110,6 +160,9 @@ function stopAllTts() {
 
 function playNextTts() {
   if (ttsIsPlaying) {
+    return;
+  }
+  if (ttsNeedsUnlock) {
     return;
   }
   const next = ttsQueue.shift();
@@ -160,17 +213,14 @@ function playNextTts() {
   };
 
   audio.play().catch(() => {
+    // Likely autoplay policy. Keep this chunk and retry after unlock.
+    ttsNeedsUnlock = true;
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
     if (ttsCurrentUrl) {
-      try {
-        URL.revokeObjectURL(ttsCurrentUrl);
-      } catch {
-        // ignore
-      }
+      ttsQueue.unshift({ url: ttsCurrentUrl, sessionId });
     }
     ttsCurrentUrl = null;
-    playNextTts();
   });
 }
 
@@ -627,6 +677,7 @@ function setListening(isListening) {
 
 function toggleListeningFromTap(event) {
   event?.preventDefault?.();
+  unlockAudioFromGesture();
   const now = Date.now();
   if (now - lastToggleAt < 260) {
     return;
