@@ -120,6 +120,9 @@
         </div>
 
         <div class="type-composer" id="typeComposer" aria-hidden="true">
+          <button type="button" class="type-composer-close" id="typeComposerClose" aria-label="close typing">
+            ×
+          </button>
           <input
             id="typeComposerInput"
             class="type-composer-input"
@@ -312,16 +315,32 @@
 
             <label class="field">
               <span class="field-label">subscription</span>
-              <select id="accountSubscription" class="field-select">
-                <option value="starter">starter</option>
-                <option value="pro">pro</option>
-                <option value="team">team</option>
-              </select>
+              <button type="button" id="accountSubscriptionButton" class="field-select-button">starter</button>
             </label>
 
             <div class="modal-actions">
               <button type="button" class="glass-button" data-modal-close>cancel</button>
               <button type="button" class="glass-button primary" id="accountSave">save</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="subscriptionModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="subscription">
+            <div class="modal-header">
+              <h2>subscription</h2>
+              <p>pick your plan</p>
+            </div>
+
+            <div class="subscription-list" role="list">
+              <button type="button" class="subscription-option" data-subscription-option="starter">starter <span>solo basics</span></button>
+              <button type="button" class="subscription-option" data-subscription-option="pro">pro <span>deeper help</span></button>
+              <button type="button" class="subscription-option" data-subscription-option="team">team <span>shared workflow</span></button>
+            </div>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button primary" data-modal-close>done</button>
             </div>
           </div>
         </section>

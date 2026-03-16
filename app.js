@@ -1,6 +1,7 @@
 const transcriptPane = document.getElementById("transcriptPane");
 const transcriptList = document.getElementById("transcriptList");
 const recordButton = document.getElementById("recordButton");
+const recordStack = document.getElementById("recordStack");
 const promptSeed = document.getElementById("promptSeed");
 const appFrame = document.querySelector(".app-frame");
 const typeInstead = document.getElementById("typeInstead");
@@ -25,6 +26,9 @@ const taskNotesInput = document.getElementById("taskNotesInput");
 const taskTalkButton = document.getElementById("taskTalkButton");
 const taskBackLink = document.getElementById("taskBackLink");
 const taskRelatedList = document.getElementById("taskRelatedList");
+const taskSubtaskInput = document.getElementById("taskSubtaskInput");
+const taskSubtaskAdd = document.getElementById("taskSubtaskAdd");
+const taskSubtaskList = document.getElementById("taskSubtaskList");
 
 const listSheet = document.getElementById("listSheet");
 const listSheetScrim = document.getElementById("listSheetScrim");
@@ -35,6 +39,7 @@ const listSheetBody = document.getElementById("listSheetBody");
 const typeComposer = document.getElementById("typeComposer");
 const typeComposerInput = document.getElementById("typeComposerInput");
 const typeComposerSend = document.getElementById("typeComposerSend");
+const typeComposerClose = document.getElementById("typeComposerClose");
 
 const volumeWrap = document.getElementById("volumeWrap");
 const volumeButton = document.getElementById("volumeButton");
@@ -72,8 +77,11 @@ const accountModal = document.getElementById("accountModal");
 const accountName = document.getElementById("accountName");
 const accountEmail = document.getElementById("accountEmail");
 const accountPayment = document.getElementById("accountPayment");
-const accountSubscription = document.getElementById("accountSubscription");
+const accountSubscriptionButton = document.getElementById("accountSubscriptionButton");
 const accountSave = document.getElementById("accountSave");
+
+const subscriptionModal = document.getElementById("subscriptionModal");
+const subscriptionOptionButtons = Array.from(document.querySelectorAll("[data-subscription-option]"));
 
 const textInputModal = document.getElementById("textInputModal");
 const textInputField = document.getElementById("textInputField");
@@ -127,6 +135,7 @@ let conversation = [];
 
 let isListeningNow = false;
 let lastToggleAt = 0;
+let typeComposerAllowBlur = false;
 
 let ttsSessionId = 0;
 let ttsQueue = [];
@@ -366,6 +375,26 @@ function getTaskStateMap(userId = getCurrentUserId()) {
   return map && typeof map === "object" ? map : {};
 }
 
+function normalizeSubtaskList(rawList) {
+  if (!Array.isArray(rawList)) {
+    return [];
+  }
+  return rawList
+    .map((item, index) => {
+      const title = normalizeTaskTitle(item?.title);
+      if (!title) {
+        return null;
+      }
+      return {
+        id: String(item?.id || `subtask-${index + 1}`),
+        title,
+        completed: Boolean(item?.completed)
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 40);
+}
+
 function readTaskEntry(title, userId = getCurrentUserId()) {
   const normalized = normalizeTaskTitle(title);
   const key = makeTaskKey(normalized);
@@ -376,6 +405,7 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     title: normalized,
     completed: Boolean(entry.completed),
     notes: String(entry.notes || ""),
+    subtasks: normalizeSubtaskList(entry.subtasks),
     updatedAt: Number(entry.updatedAt || 0) || 0
   };
 }
@@ -395,6 +425,7 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     title: normalized,
     completed: Boolean(nextValue?.completed),
     notes: String(nextValue?.notes || ""),
+    subtasks: normalizeSubtaskList(nextValue?.subtasks),
     updatedAt: Date.now()
   };
 
@@ -420,6 +451,49 @@ function setTaskNotes(title, notes, userId = getCurrentUserId()) {
     (current) => ({ ...current, notes: String(notes || "") }),
     userId
   );
+}
+
+function addTaskSubtask(title, subtaskTitle, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(subtaskTitle);
+  if (!normalized) {
+    return readTaskEntry(title, userId);
+  }
+  return updateTaskEntry(
+    title,
+    (current) => ({
+      ...current,
+      subtasks: [...normalizeSubtaskList(current.subtasks), {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title: normalized,
+        completed: false
+      }]
+    }),
+    userId
+  );
+}
+
+function toggleTaskSubtask(title, subtaskId, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => ({
+      ...current,
+      subtasks: normalizeSubtaskList(current.subtasks).map((item) =>
+        item.id === subtaskId ? { ...item, completed: !item.completed } : item
+      )
+    }),
+    userId
+  );
+}
+
+function getSubscriptionLabel(value) {
+  const normalized = String(value || "starter").trim().toLowerCase();
+  if (normalized === "team") {
+    return "team";
+  }
+  if (normalized === "pro") {
+    return "pro";
+  }
+  return "starter";
 }
 
 function getLatestStartupListForUser(userId = getCurrentUserId()) {
@@ -771,9 +845,10 @@ function renderStartupDashboard() {
   const userId = getCurrentUserId();
   const latest = getLatestStartupListForUser(userId);
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
+  const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
 
   if (projectsLeftEl) {
-    projectsLeftEl.textContent = String(items.length);
+    projectsLeftEl.textContent = String(remainingCount);
   }
 
   if (lastUpdatedEl) {
@@ -847,6 +922,50 @@ function renderTaskRelatedList(currentTitle) {
   });
 }
 
+function renderTaskSubtasks(title) {
+  if (!taskSubtaskList) {
+    return;
+  }
+
+  const state = readTaskEntry(title);
+  taskSubtaskList.innerHTML = "";
+
+  if (!state.subtasks.length) {
+    const empty = document.createElement("div");
+    empty.className = "startup-empty";
+    empty.textContent = "add subtasks here so this task turns into something you can actually work through.";
+    taskSubtaskList.appendChild(empty);
+    return;
+  }
+
+  state.subtasks.forEach((subtask) => {
+    const row = document.createElement("div");
+    row.className = `task-subtask-item${subtask.completed ? " is-complete" : ""}`;
+
+    const label = document.createElement("div");
+    label.className = "task-subtask-title";
+    label.textContent = subtask.title;
+
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = `task-subtask-check${subtask.completed ? " is-complete" : ""}`;
+    check.textContent = subtask.completed ? "✓" : "";
+    check.setAttribute(
+      "aria-label",
+      subtask.completed ? "mark subtask incomplete" : "mark subtask complete"
+    );
+    check.addEventListener("click", () => {
+      toggleTaskSubtask(title, subtask.id);
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    });
+
+    row.appendChild(label);
+    row.appendChild(check);
+    taskSubtaskList.appendChild(row);
+  });
+}
+
 function renderTaskWorkspace() {
   if (!taskStage && !taskPageTitle && !taskNotesInput) {
     return;
@@ -864,9 +983,19 @@ function renderTaskWorkspace() {
       taskNotesInput.value = "";
       taskNotesInput.disabled = true;
     }
+    if (taskSubtaskInput) {
+      taskSubtaskInput.value = "";
+      taskSubtaskInput.disabled = true;
+    }
+    if (taskSubtaskAdd) {
+      taskSubtaskAdd.disabled = true;
+    }
     if (taskDoneToggle) {
       taskDoneToggle.disabled = true;
       taskDoneToggle.textContent = "no task yet";
+    }
+    if (taskSubtaskList) {
+      taskSubtaskList.innerHTML = "";
     }
     renderTaskRelatedList("");
     return;
@@ -874,12 +1003,16 @@ function renderTaskWorkspace() {
 
   setActiveTaskContext(title);
   const state = readTaskEntry(title);
+  const completedSubtasks = state.subtasks.filter((item) => item.completed).length;
+  const subtaskStatus = state.subtasks.length
+    ? `${completedSubtasks}/${state.subtasks.length} subtasks done`
+    : "no subtasks yet";
 
   if (taskPageTitle) {
     taskPageTitle.textContent = title;
   }
   if (taskPageStatus) {
-    taskPageStatus.textContent = state.completed ? "done" : "in progress";
+    taskPageStatus.textContent = `${state.completed ? "done" : "in progress"} · ${subtaskStatus}`;
   }
   if (taskDoneToggle) {
     taskDoneToggle.disabled = false;
@@ -896,6 +1029,12 @@ function renderTaskWorkspace() {
       taskNotesInput.value = state.notes;
     }
   }
+  if (taskSubtaskInput) {
+    taskSubtaskInput.disabled = false;
+  }
+  if (taskSubtaskAdd) {
+    taskSubtaskAdd.disabled = false;
+  }
   if (taskTalkButton) {
     taskTalkButton.href = buildTalkHref(title);
   }
@@ -904,6 +1043,7 @@ function renderTaskWorkspace() {
   }
 
   renderTaskRelatedList(title);
+  renderTaskSubtasks(title);
 }
 
 function clamp01(value) {
@@ -1011,10 +1151,15 @@ function setTypeComposerOpen(isOpen) {
   if (!typeComposer) {
     return;
   }
+  appFrame?.classList.toggle("is-typing", isOpen);
+  recordStack?.classList.toggle("is-hidden-by-composer", isOpen);
   typeComposer.classList.toggle("open", isOpen);
   typeComposer.setAttribute("aria-hidden", String(!isOpen));
+  typeComposerAllowBlur = !isOpen;
   if (!isOpen) {
     typeComposer.style.bottom = "";
+  } else {
+    updateTypeComposerKeyboardOffset();
   }
 }
 
@@ -1950,7 +2095,6 @@ typeInstead?.addEventListener("click", () => {
   ensureStartedUi();
   setTypeComposerOpen(true);
   if (typeComposerInput) {
-    typeComposerInput.value = "";
     requestAnimationFrame(() => {
       typeComposerInput.focus();
     });
@@ -1964,8 +2108,15 @@ typeComposerSend?.addEventListener("click", () => {
   if (!value) {
     return;
   }
+  if (typeComposerInput) {
+    typeComposerInput.value = "";
+  }
   setTypeComposerOpen(false);
   sendTypedToAnna(value);
+});
+
+typeComposerClose?.addEventListener("click", () => {
+  setTypeComposerOpen(false);
 });
 
 typeComposerInput?.addEventListener("keydown", (event) => {
@@ -1976,8 +2127,26 @@ typeComposerInput?.addEventListener("keydown", (event) => {
   if (!value) {
     return;
   }
+  if (typeComposerInput) {
+    typeComposerInput.value = "";
+  }
   setTypeComposerOpen(false);
   sendTypedToAnna(value);
+});
+
+typeComposerInput?.addEventListener("blur", () => {
+  if (!typeComposer?.classList.contains("open") || typeComposerAllowBlur) {
+    return;
+  }
+  window.setTimeout(() => {
+    if (!typeComposer?.classList.contains("open") || typeComposerAllowBlur) {
+      return;
+    }
+    if (document.activeElement !== typeComposerInput) {
+      typeComposerInput?.focus?.();
+      updateTypeComposerKeyboardOffset();
+    }
+  }, 40);
 });
 
 let volumeHoldTimer = null;
@@ -2137,21 +2306,6 @@ document.addEventListener("pointerdown", (event) => {
   if (isAdjustingVolume) {
     return;
   }
-  // close inline composer if you tap away
-  if (typeComposer && typeComposer.classList.contains("open")) {
-    const target = event.target;
-    const path = event.composedPath ? event.composedPath() : null;
-    const isInsideComposer =
-      (path && (path.includes(typeComposer) || path.includes(typeInstead))) ||
-      (!!target &&
-        ((typeComposer.contains && typeComposer.contains(target)) ||
-          (typeInstead && typeInstead.contains && typeInstead.contains(target))));
-
-    if (!isInsideComposer) {
-      setTypeComposerOpen(false);
-    }
-  }
-
   // volume panel closes via scrim only
 });
 
@@ -2293,6 +2447,30 @@ taskNotesInput?.addEventListener("input", () => {
   setTaskNotes(title, taskNotesInput.value);
 });
 
+function addCurrentTaskSubtask() {
+  const title = getCurrentTaskTitle();
+  const subtaskTitle = String(taskSubtaskInput?.value || "").trim();
+  if (!title || !subtaskTitle) {
+    return;
+  }
+  addTaskSubtask(title, subtaskTitle);
+  if (taskSubtaskInput) {
+    taskSubtaskInput.value = "";
+    taskSubtaskInput.focus();
+  }
+  renderTaskWorkspace();
+}
+
+taskSubtaskAdd?.addEventListener("click", addCurrentTaskSubtask);
+
+taskSubtaskInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  addCurrentTaskSubtask();
+});
+
 // startup dashboard is driven by real lists captured from anna replies.
 
 voiceRepliesToggle?.addEventListener("change", () => {
@@ -2324,6 +2502,7 @@ function closeAllModals() {
   setModalOpen(accountModal, false);
   setModalOpen(authModal, false);
   setModalOpen(voiceModal, false);
+  setModalOpen(subscriptionModal, false);
   setTypeComposerOpen(false);
 }
 
@@ -2345,6 +2524,39 @@ wireModalClose(textInputModal);
 wireModalClose(accountModal);
 wireModalClose(authModal);
 wireModalClose(voiceModal);
+wireModalClose(subscriptionModal);
+
+function getSelectedSubscription() {
+  return getSubscriptionLabel(
+    accountSubscriptionButton?.dataset.value || getAccountValue(STORAGE_KEYS.subscription) || "starter"
+  );
+}
+
+function setSelectedSubscription(value) {
+  const normalized = getSubscriptionLabel(value);
+  if (accountSubscriptionButton) {
+    accountSubscriptionButton.dataset.value = normalized;
+    accountSubscriptionButton.textContent = normalized;
+  }
+  subscriptionOptionButtons.forEach((button) => {
+    const isActive = getSubscriptionLabel(button.dataset.subscriptionOption) === normalized;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
+accountSubscriptionButton?.addEventListener("click", () => {
+  setSelectedSubscription(getSelectedSubscription());
+  setModalOpen(subscriptionModal, true);
+});
+
+subscriptionOptionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setSelectedSubscription(button.dataset.subscriptionOption);
+    setModalOpen(subscriptionModal, false);
+    requestAnimationFrame(() => accountSubscriptionButton?.focus?.());
+  });
+});
 
 function syncAuthIntoProfileFields() {
   const user = getAuthUser();
@@ -2421,7 +2633,7 @@ function openAccountModal(focusField) {
   if (accountName) accountName.value = getAccountValue(STORAGE_KEYS.userName);
   if (accountEmail) accountEmail.value = getAccountValue(STORAGE_KEYS.userEmail);
   if (accountPayment) accountPayment.value = getAccountValue(STORAGE_KEYS.paymentMethod);
-  if (accountSubscription) accountSubscription.value = getAccountValue(STORAGE_KEYS.subscription) || "starter";
+  setSelectedSubscription(getAccountValue(STORAGE_KEYS.subscription) || "starter");
 
   closeAllModals();
   setModalOpen(accountModal, true);
@@ -2430,7 +2642,7 @@ function openAccountModal(focusField) {
     name: accountName,
     email: accountEmail,
     payment: accountPayment,
-    subscription: accountSubscription
+    subscription: accountSubscriptionButton
   };
   const field = fieldMap[focusField] || accountName;
   if (field && field.focus) {
@@ -2517,7 +2729,7 @@ accountSave?.addEventListener("click", () => {
   const nextName = String(accountName?.value || "").trim();
   const nextEmail = String(accountEmail?.value || "").trim();
   const nextPayment = String(accountPayment?.value || "").trim();
-  const nextSub = String(accountSubscription?.value || "starter").trim();
+  const nextSub = getSelectedSubscription();
 
   localStorage.setItem(STORAGE_KEYS.userName, nextName);
   localStorage.setItem(STORAGE_KEYS.userEmail, nextEmail);

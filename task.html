@@ -67,6 +67,22 @@
             ></textarea>
           </label>
 
+          <div class="task-subtasks-card">
+            <div class="task-related-title">subtasks</div>
+            <div class="task-subtask-composer">
+              <input
+                id="taskSubtaskInput"
+                class="task-subtask-input"
+                type="text"
+                inputmode="text"
+                autocomplete="off"
+                placeholder="add a smaller step"
+              />
+              <button class="glass-button primary" id="taskSubtaskAdd" type="button">add</button>
+            </div>
+            <div class="task-subtask-list" id="taskSubtaskList"></div>
+          </div>
+
           <div class="task-secondary-actions">
             <a class="glass-button" id="taskBackLink" href="startup.html">back to startup</a>
           </div>
@@ -246,17 +262,40 @@
               </label>
               <label class="field">
                 <span>subscription</span>
-                <select id="accountSubscription" class="text-input">
-                  <option value="starter">starter</option>
-                  <option value="pro">pro</option>
-                  <option value="team">team</option>
-                </select>
+                <button type="button" id="accountSubscriptionButton" class="field-select-button">starter</button>
               </label>
             </div>
 
             <div class="modal-footer">
               <button class="glass-button" type="button" data-modal-close>cancel</button>
               <button class="glass-button primary" type="button" id="accountSave">save</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="subscriptionModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="subscription">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <div class="modal-title">subscription</div>
+                <div class="modal-sub">pick your plan</div>
+              </div>
+            </div>
+
+            <div class="subscription-list" role="list">
+              <button type="button" class="subscription-option" data-subscription-option="starter">starter <span>solo basics</span></button>
+              <button type="button" class="subscription-option" data-subscription-option="pro">pro <span>deeper help</span></button>
+              <button type="button" class="subscription-option" data-subscription-option="team">team <span>shared workflow</span></button>
+            </div>
+
+            <div class="modal-footer">
+              <button class="glass-button primary" type="button" data-modal-close>done</button>
             </div>
           </div>
         </section>

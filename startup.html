@@ -24,13 +24,13 @@
 
           <div class="topbar-spacer" aria-hidden="true"></div>
 
-          <div class="topbar-logo" aria-hidden="true">
+          <a class="topbar-logo topbar-logo-link" href="index.html" aria-label="talk to anna">
             <div class="anna-logo anna-logo-small image-loaded">
               <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
               <span class="logo-triangle"></span>
               <span class="logo-orb"></span>
             </div>
-          </div>
+          </a>
         </header>
 
         <aside class="menu-drawer" id="menuDrawer" aria-hidden="true">
@@ -236,17 +236,40 @@
               </label>
               <label class="field">
                 <span>subscription</span>
-                <select id="accountSubscription" class="text-input">
-                  <option value="starter">starter</option>
-                  <option value="pro">pro</option>
-                  <option value="team">team</option>
-                </select>
+                <button type="button" id="accountSubscriptionButton" class="field-select-button">starter</button>
               </label>
             </div>
 
             <div class="modal-footer">
               <button class="glass-button" type="button" data-modal-close>cancel</button>
               <button class="glass-button primary" type="button" id="accountSave">save</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="subscriptionModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="subscription">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <div class="modal-title">subscription</div>
+                <div class="modal-sub">pick your plan</div>
+              </div>
+            </div>
+
+            <div class="subscription-list" role="list">
+              <button type="button" class="subscription-option" data-subscription-option="starter">starter <span>solo basics</span></button>
+              <button type="button" class="subscription-option" data-subscription-option="pro">pro <span>deeper help</span></button>
+              <button type="button" class="subscription-option" data-subscription-option="team">team <span>shared workflow</span></button>
+            </div>
+
+            <div class="modal-footer">
+              <button class="glass-button primary" type="button" data-modal-close>done</button>
             </div>
           </div>
         </section>
