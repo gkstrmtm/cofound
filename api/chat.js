@@ -37,22 +37,31 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: "messages must be a non-empty array" });
   }
 
-  const filtered = [];
-  for (const msg of messages.slice(-12)) {
+  const normalizedMessages = [];
+  for (const msg of messages) {
     const role = msg && msg.role;
     const content = msg && msg.content;
-    if (role !== "user" && role !== "assistant") continue;
+    if (role !== "user" && role !== "assistant" && role !== "system") continue;
     if (typeof content !== "string") continue;
     const trimmed = content.trim();
     if (!trimmed) continue;
-    filtered.push({ role, content: trimmed });
+    normalizedMessages.push({ role, content: trimmed });
   }
 
-  if (filtered.length === 0) {
+  if (normalizedMessages.length === 0) {
     return res.status(400).json({ error: "no valid messages" });
   }
 
   try {
+    const clientSystemMessages = normalizedMessages.filter((msg) => msg.role === "system");
+    const conversationMessages = normalizedMessages.filter((msg) => msg.role !== "system").slice(-12);
+    const mergedSystemPrompt = [
+      SYSTEM_PROMPT,
+      ...clientSystemMessages.map((msg) => msg.content)
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
     const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -62,8 +71,8 @@ module.exports = async (req, res) => {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          ...filtered
+          { role: "system", content: mergedSystemPrompt },
+          ...conversationMessages
         ],
         max_tokens: 520,
         temperature: 0.55

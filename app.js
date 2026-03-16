@@ -3332,8 +3332,9 @@ if (recordButton) {
   });
   if ("PointerEvent" in window) {
     recordButton.addEventListener("pointerup", toggleListeningFromTap);
+  } else {
+    recordButton.addEventListener("click", toggleListeningFromTap);
   }
-  recordButton.addEventListener("click", toggleListeningFromTap);
 }
 
 function setMenuOpen(isOpen) {
