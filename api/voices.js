@@ -48,7 +48,8 @@ module.exports = async (req, res) => {
       ? data.voices.map((v) => ({
           voice_id: String(v?.voice_id || ""),
           name: String(v?.name || "").trim(),
-          category: String(v?.category || "").trim()
+          category: String(v?.category || "").trim(),
+          gender: String(v?.labels?.gender || "").trim().toLowerCase()
         }))
       : [];
 

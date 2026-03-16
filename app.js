@@ -612,9 +612,12 @@ async function loadVoicesIntoModal() {
     }
 
     const data = await res.json();
-    const voices = Array.isArray(data?.voices) ? data.voices : [];
+    const allVoices = Array.isArray(data?.voices) ? data.voices : [];
+    const voices = allVoices.filter((v) => String(v?.gender || "").toLowerCase() === "female");
     if (!voices.length) {
-      voiceStatus.textContent = "no voices found";
+      voiceStatus.textContent = allVoices.length
+        ? "no female voices found in your elevenlabs account"
+        : "no voices found";
       return;
     }
 
@@ -736,6 +739,10 @@ function ensureSpeechRecognizer() {
       if (result.isFinal) {
         setInterim("");
         pushEntry("user", text);
+
+        // stop listening once the user has finished a thought,
+        // so anna's spoken reply doesn't get blocked and doesn't echo back into the mic.
+        setListening(false);
 
         conversation = [...conversation, { role: "user", content: text }].slice(-16);
         const pendingId = pushPendingAnna();
