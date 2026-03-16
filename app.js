@@ -2105,6 +2105,24 @@ async function readApiErrorMessage(response) {
   return `http ${response.status}`;
 }
 
+function getTtsFailureNotice(detail) {
+  const text = String(detail || "").trim();
+  if (!text) {
+    return "voice reply failed. elevenlabs didn't return audio.";
+  }
+
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("credits remaining") ||
+    normalized.includes("quota") ||
+    normalized.includes("exceeds your api key")
+  ) {
+    return "voice reply is off because the elevenlabs account is out of credits.";
+  }
+
+  return "voice reply failed. elevenlabs didn't return audio.";
+}
+
 function stopAllTts() {
   ttsSessionId += 1;
   ttsQueue = [];
@@ -2249,7 +2267,7 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       if (!res.ok) {
         const detail = await readApiErrorMessage(res);
         console.error("anna elevenlabs tts failed:", detail);
-        setAudioNotice("voice reply failed. elevenlabs didn't return audio.");
+        setAudioNotice(getTtsFailureNotice(detail));
         return;
       }
       const blob = await res.blob();
