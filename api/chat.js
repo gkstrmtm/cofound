@@ -53,7 +53,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
+    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -61,17 +61,11 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         model,
-        input: [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: SYSTEM_PROMPT }]
-          },
-          ...filtered.map((m) => ({
-            role: m.role,
-            content: [{ type: "input_text", text: m.content }]
-          }))
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          ...filtered
         ],
-        max_output_tokens: 180,
+        max_tokens: 180,
         temperature: 0.6
       })
     });
@@ -88,7 +82,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    const text = String((data && data.output_text) || "").trim();
+    const text = String((data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "").trim();
     if (!text) {
       return res.status(500).json({
         error: "openai request failed",

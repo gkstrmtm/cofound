@@ -52,6 +52,9 @@ let speechRecognizer = null;
 let interimText = "";
 let hasStarted = false;
 
+let interimEl = null;
+const pendingEls = new Map();
+
 let conversation = [];
 
 function initBrandLogoImages() {
@@ -74,34 +77,51 @@ function initBrandLogoImages() {
   });
 }
 
-function renderTranscript() {
-  if (!transcriptPane || !transcriptList) {
+function scrollTranscriptIfNeeded() {
+  if (!transcriptPane) {
     return;
   }
-
   const stickToBottom =
     transcriptPane.scrollHeight - transcriptPane.scrollTop - transcriptPane.clientHeight < 28;
-
-  transcriptList.innerHTML = "";
-
-  const lines = transcriptEntries.slice(-60);
-  if (interimText) {
-    lines.push({ role: "user", text: interimText, interim: true });
-  }
-
-  lines.forEach((entry) => {
-    const paragraph = document.createElement("p");
-    const isInterim = Boolean(entry.interim);
-    paragraph.className = `transcript-line ${entry.role}${isInterim ? " interim" : ""}`;
-    paragraph.textContent = `“${entry.text}”`;
-    transcriptList.appendChild(paragraph);
-  });
-
   if (stickToBottom) {
     requestAnimationFrame(() => {
       transcriptPane.scrollTop = transcriptPane.scrollHeight;
     });
   }
+}
+
+function appendLine(role, text, opts = {}) {
+  if (!transcriptList) {
+    return null;
+  }
+  const paragraph = document.createElement("p");
+  paragraph.className = `transcript-line ${role}${opts.interim ? " interim" : ""}`;
+  paragraph.textContent = `“${text}”`;
+  if (opts.pendingId) {
+    paragraph.dataset.pendingId = opts.pendingId;
+  }
+  transcriptList.appendChild(paragraph);
+  scrollTranscriptIfNeeded();
+  return paragraph;
+}
+
+function setInterim(nextText) {
+  const cleaned = String(nextText || "").trim().toLowerCase();
+  interimText = cleaned;
+  if (!cleaned) {
+    if (interimEl && interimEl.remove) {
+      interimEl.remove();
+    }
+    interimEl = null;
+    return;
+  }
+
+  if (!interimEl) {
+    interimEl = appendLine("user", cleaned, { interim: true });
+    return;
+  }
+  interimEl.textContent = `“${cleaned}”`;
+  scrollTranscriptIfNeeded();
 }
 
 function pushEntry(role, text) {
@@ -110,25 +130,42 @@ function pushEntry(role, text) {
     return;
   }
 
+  // finalize interim before appending
+  if (interimEl && interimEl.remove) {
+    interimEl.remove();
+  }
+  interimEl = null;
+  interimText = "";
+
   transcriptEntries = [...transcriptEntries, { role, text: cleaned }].slice(-80);
-  renderTranscript();
+  appendLine(role, cleaned);
 }
 
 function pushPendingAnna() {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   transcriptEntries = [...transcriptEntries, { role: "ai", text: "…", pendingId: id }].slice(-80);
-  renderTranscript();
+  const el = appendLine("ai", "…", { pendingId: id });
+  if (el) {
+    pendingEls.set(id, el);
+  }
   return id;
 }
 
 function resolvePendingAnna(pendingId, text) {
+  const cleaned = String(text || "").trim().toLowerCase() || "…";
   transcriptEntries = transcriptEntries.map((entry) => {
     if (entry.pendingId !== pendingId) {
       return entry;
     }
-    return { role: "ai", text: String(text || "").trim().toLowerCase() || "…" };
+    return { role: "ai", text: cleaned };
   });
-  renderTranscript();
+
+  const el = pendingEls.get(pendingId) || (transcriptList && transcriptList.querySelector && transcriptList.querySelector(`[data-pending-id="${pendingId}"]`));
+  if (el) {
+    el.textContent = `“${cleaned}”`;
+  }
+  pendingEls.delete(pendingId);
+  scrollTranscriptIfNeeded();
 }
 
 async function fetchAnnaReply() {
@@ -196,7 +233,7 @@ function ensureSpeechRecognizer() {
       }
 
       if (result.isFinal) {
-        interimText = "";
+        setInterim("");
         pushEntry("user", text);
 
         conversation = [...conversation, { role: "user", content: text }].slice(-16);
@@ -217,8 +254,7 @@ function ensureSpeechRecognizer() {
       }
     }
 
-    interimText = nextInterim;
-    renderTranscript();
+    setInterim(nextInterim);
   };
 
   recognizer.onerror = () => {
@@ -251,7 +287,7 @@ function setListening(isListening) {
 
   if (isListening) {
     transcriptPane.classList.remove("hidden");
-    renderTranscript();
+    scrollTranscriptIfNeeded();
 
     if (!speechRecognizer) {
       speechRecognizer = ensureSpeechRecognizer();
@@ -282,7 +318,7 @@ function setListening(isListening) {
   }
 
   interimText = "";
-  renderTranscript();
+  setInterim("");
   if (speechRecognizer) {
     try {
       speechRecognizer.stop();
