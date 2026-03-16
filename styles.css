@@ -448,6 +448,23 @@ button {
   display: none;
 }
 
+.type-instead {
+  margin-top: 0.55rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--peach);
+  text-align: center;
+  width: fit-content;
+  align-self: center;
+  padding: 0.25rem 0.4rem;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.type-instead:active {
+  transform: translateY(1px);
+}
+
 /* modal */
 .modal {
   position: absolute;

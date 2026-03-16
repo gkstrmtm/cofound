@@ -3,6 +3,7 @@ const transcriptList = document.getElementById("transcriptList");
 const recordButton = document.getElementById("recordButton");
 const promptSeed = document.getElementById("promptSeed");
 const appFrame = document.querySelector(".app-frame");
+const typeInstead = document.getElementById("typeInstead");
 
 const menuButton = document.getElementById("menuButton");
 const menuDrawer = document.getElementById("menuDrawer");
@@ -802,6 +803,7 @@ function setListening(isListening) {
   if (!hasStarted) {
     hasStarted = true;
     appFrame?.classList.add("has-started");
+    typeInstead?.classList.remove("hidden");
   }
 
   if (isListening) {
@@ -850,6 +852,18 @@ function setListening(isListening) {
     }
   }
 }
+
+typeInstead?.addEventListener("click", () => {
+  unlockAudioFromGesture();
+  closeAllModals();
+  if (textInputField) {
+    textInputField.value = "";
+    requestAnimationFrame(() => {
+      textInputField.focus();
+    });
+  }
+  setModalOpen(textInputModal, true);
+});
 
 function toggleListeningFromTap(event) {
   event?.preventDefault?.();
