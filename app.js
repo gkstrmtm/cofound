@@ -1973,29 +1973,22 @@ function primeAudioUnlockOnFirstGesture() {
 }
 
 function getVoiceRepliesEnabled() {
-  return (localStorage.getItem(STORAGE_KEYS.voiceReplies) || "true") === "true";
+  return !getMuted();
 }
 
 function isVoiceOutputEnabled() {
-  return getVoiceRepliesEnabled() && !getMuted();
+  return !getMuted();
 }
 
 function renderVoiceRepliesSettingUi() {
   if (!voiceRepliesToggle) {
     return;
   }
-  const muted = getMuted();
-  if (muted) {
-    voiceRepliesToggle.checked = false;
-    voiceRepliesToggle.disabled = true;
-    return;
-  }
-  voiceRepliesToggle.disabled = false;
-  voiceRepliesToggle.checked = getVoiceRepliesEnabled();
+  voiceRepliesToggle.checked = !getMuted();
+  voiceRepliesToggle.disabled = true;
 }
 
-function setVoiceRepliesEnabled(enabled) {
-  setStoredValue(STORAGE_KEYS.voiceReplies, enabled ? "true" : "false");
+function setVoiceRepliesEnabled(_enabled) {
   renderVoiceRepliesSettingUi();
   if (!isVoiceOutputEnabled()) {
     stopAllTts();
@@ -3266,8 +3259,7 @@ taskSubtaskInput?.addEventListener("keydown", (event) => {
 // startup dashboard is driven by real lists captured from anna replies.
 
 voiceRepliesToggle?.addEventListener("change", () => {
-  unlockAudioFromGesture();
-  setVoiceRepliesEnabled(Boolean(voiceRepliesToggle.checked));
+  renderVoiceRepliesSettingUi();
 });
 
 chooseVoice?.addEventListener("click", () => {
