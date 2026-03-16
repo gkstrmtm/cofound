@@ -5,24 +5,7 @@
  * Exposes only public config that is safe for the browser.
  */
 
-function resolveSupabasePublicKey() {
-  const candidates = [
-    process.env.SUPABASE_ANON_KEY,
-    process.env.SUPABASE_PUBLISHABLE_KEY,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  ]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-
-  const key = candidates[0] || "";
-  const looksSecret = /^sb_secret_/i.test(key) || /service[_-]?role/i.test(key);
-
-  return {
-    key: looksSecret ? "" : key,
-    looksSecret
-  };
-}
+const { getSupabaseUrl, resolveSupabaseAdminKey, resolveSupabasePublicKey } = require("./_supabase");
 
 module.exports = async (req, res) => {
   if (req.method !== "GET") {
@@ -30,14 +13,16 @@ module.exports = async (req, res) => {
     return res.status(405).json({ ok: false, error: "method not allowed" });
   }
 
-  const supabaseUrl = (process.env.SUPABASE_URL || "").trim();
+  const supabaseUrl = getSupabaseUrl();
   const { key: supabaseAnonKey, looksSecret } = resolveSupabasePublicKey();
+  const { hasAdminKey } = resolveSupabaseAdminKey();
 
   return res.status(200).json({
     ok: true,
     supabaseUrl,
     supabaseAnonKey,
     hasSupabase: Boolean(supabaseUrl && supabaseAnonKey),
+    hasSupabaseAdminKey: hasAdminKey,
     supabaseKeyError: looksSecret ? "supabase secret key cannot be used in the browser; use the anon public key" : null
   });
 };

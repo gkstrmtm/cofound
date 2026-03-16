@@ -4,25 +4,7 @@
  */
 
 const { getElevenLabsKey } = require("./_elevenlabs");
-
-function resolveSupabasePublicKey() {
-  const candidates = [
-    process.env.SUPABASE_ANON_KEY,
-    process.env.SUPABASE_PUBLISHABLE_KEY,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  ]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-
-  const key = candidates[0] || "";
-  const looksSecret = /^sb_secret_/i.test(key) || /service[_-]?role/i.test(key);
-
-  return {
-    hasPublicKey: Boolean(key) && !looksSecret,
-    looksSecret
-  };
-}
+const { getSupabaseUrl, resolveSupabaseAdminKey, resolveSupabasePublicKey } = require("./_supabase");
 
 module.exports = async (req, res) => {
   if (req.method !== "GET") {
@@ -38,7 +20,8 @@ module.exports = async (req, res) => {
   const elevenModel = (process.env.ELEVENLABS_MODEL || "eleven_turbo_v2_5").trim();
   const hasElevenVoiceId = Boolean((process.env.ELEVENLABS_VOICE_ID || "").trim());
   const supabase = resolveSupabasePublicKey();
-  const hasSupabaseUrl = Boolean((process.env.SUPABASE_URL || "").trim());
+  const hasSupabaseUrl = Boolean(getSupabaseUrl());
+  const { hasAdminKey } = resolveSupabaseAdminKey();
 
   return res.status(200).json({
     ok: true,
@@ -52,7 +35,8 @@ module.exports = async (req, res) => {
     elevenlabs_model: elevenModel,
     has_elevenlabs_voice_id: hasElevenVoiceId,
     has_supabase_url: hasSupabaseUrl,
-    has_supabase_public_key: supabase.hasPublicKey,
+    has_supabase_public_key: Boolean(supabase.key),
+    has_supabase_admin_key: hasAdminKey,
     supabase_key_error: supabase.looksSecret
       ? "supabase secret key cannot be used in the browser; use the anon public key"
       : null

@@ -499,25 +499,34 @@ async function signUpWithPassword() {
 
   const client = await getSupabaseClient();
   if (client) {
-    const { data, error } = await client.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          name
-        }
+    const redirectTo = `${window.location.origin}${window.location.pathname}`;
+    const signupRes = await fetch("/api/auth-signup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ email, password, name, redirectTo })
+    });
+    const signupData = await signupRes.json().catch(() => null);
+    if (!signupRes.ok || !signupData?.ok) {
+      throw new Error(signupData?.error || "couldn't sign up");
+    }
+
+    if (signupData.autoConfirmed) {
+      const { data, error } = await client.auth.signInWithPassword({ email, password });
+      if (error) {
+        throw new Error(error.message || "account created, but sign in failed");
       }
-    });
-    if (error) {
-      throw new Error(error.message || "couldn't sign up");
+      setAuthSession({
+        name: String(data?.user?.user_metadata?.name || name || "").trim(),
+        email: data?.user?.email || email
+      });
+    } else {
+      throw new Error(
+        "email confirmation is still on in supabase. either disable it or add SUPABASE_SERVICE_ROLE_KEY / SUPABASE_SECRET_KEY so signups can auto-confirm."
+      );
     }
-    if (!data?.session && data?.user) {
-      throw new Error("sign up worked, but email confirmation is on. confirm your email, then sign in.");
-    }
-    setAuthSession({
-      name: String(data?.user?.user_metadata?.name || name || "").trim(),
-      email: data?.user?.email || email
-    });
+
     await loadRemoteStateForCurrentUser();
     return;
   }

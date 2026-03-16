@@ -1,5 +1,8 @@
 import os
+import json
 from typing import Optional
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 from flask import Flask, jsonify, request, send_from_directory
 from openai import OpenAI
@@ -63,6 +66,41 @@ def get_supabase_public_key() -> tuple[Optional[str], bool]:
     return ((None if looks_secret or not key else key), looks_secret)
 
 
+def get_supabase_admin_key() -> Optional[str]:
+    candidates = [
+        (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip(),
+        (os.environ.get("SUPABASE_SECRET_KEY") or "").strip(),
+        (os.environ.get("SUPABASE_SERVICE_KEY") or "").strip(),
+    ]
+    direct = next((value for value in candidates if value), "")
+    if direct:
+        return direct
+
+    fallback = (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+    if fallback.lower().startswith("sb_secret_") or "service_role" in fallback.lower() or "service-role" in fallback.lower():
+        return fallback
+    return None
+
+
+def post_json(url: str, headers: dict[str, str], body: dict) -> tuple[int, dict]:
+    req = urlrequest.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req) as response:
+            payload = response.read().decode("utf-8")
+            return response.status, json.loads(payload or "{}")
+    except urlerror.HTTPError as exc:
+        payload = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(payload or "{}")
+        except Exception:
+            return exc.code, {"error": payload or f"http {exc.code}"}
+
+
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -113,6 +151,77 @@ def public_config():
             ),
         }
     )
+
+
+@app.post("/api/auth-signup")
+def auth_signup():
+    payload = request.get_json(silent=True) or {}
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    name = (payload.get("name") or "").strip()
+    redirect_to = (payload.get("redirectTo") or "").strip()
+
+    if not email:
+        return jsonify({"ok": False, "error": "email required"}), 400
+    if not password or len(password) < 8:
+        return jsonify({"ok": False, "error": "password must be at least 8 characters"}), 400
+
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip()
+    if not supabase_url:
+        return jsonify({"ok": False, "error": "missing SUPABASE_URL"}), 500
+
+    admin_key = get_supabase_admin_key()
+    if admin_key:
+        status, data = post_json(
+            f"{supabase_url}/auth/v1/admin/users",
+            {
+                "apikey": admin_key,
+                "Authorization": f"Bearer {admin_key}",
+                "Content-Type": "application/json",
+            },
+            {
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {"name": name},
+            },
+        )
+        if status >= 400:
+            detail = data.get("msg") or data.get("message") or data.get("error_description") or data.get("error") or f"http {status}"
+            return jsonify({"ok": False, "error": str(detail)}), 400
+        return jsonify({"ok": True, "autoConfirmed": True, "requiresEmailConfirmation": False})
+
+    public_key, looks_secret = get_supabase_public_key()
+    if not public_key:
+        return jsonify({
+            "ok": False,
+            "error": "supabase public key is missing" if not looks_secret else "supabase public key slot contains a secret key",
+        }), 500
+
+    status, data = post_json(
+        f"{supabase_url}/auth/v1/signup",
+        {
+            "apikey": public_key,
+            "Authorization": f"Bearer {public_key}",
+            "Content-Type": "application/json",
+        },
+        {
+            "email": email,
+            "password": password,
+            "data": {"name": name},
+            "email_redirect_to": redirect_to or None,
+        },
+    )
+    if status >= 400:
+        detail = data.get("msg") or data.get("message") or data.get("error_description") or data.get("error") or f"http {status}"
+        return jsonify({"ok": False, "error": str(detail)}), 400
+
+    return jsonify({
+        "ok": True,
+        "autoConfirmed": False,
+        "requiresEmailConfirmation": not bool(data.get("session")),
+        "redirectTo": redirect_to or None,
+    })
 
 
 @app.post("/api/chat")
