@@ -142,6 +142,9 @@ const pendingEls = new Map();
 
 let conversation = [];
 let currentChatSessionId = "";
+let expandedHistorySessionId = "";
+
+const CHAT_SESSION_MERGE_GAP_MS = 45 * 60 * 1000;
 
 let isListeningNow = false;
 let persistentListeningEnabled = false;
@@ -1056,6 +1059,27 @@ function getCurrentTaskTitle() {
   return readActiveTaskContext()?.title || "";
 }
 
+function getSessionPrimaryTime(session) {
+  return Number(session?.updatedAt || session?.startedAt || 0) || 0;
+}
+
+function isSameCalendarDay(a, b) {
+  if (!a || !b) {
+    return false;
+  }
+  try {
+    const left = new Date(a);
+    const right = new Date(b);
+    return (
+      left.getFullYear() === right.getFullYear() &&
+      left.getMonth() === right.getMonth() &&
+      left.getDate() === right.getDate()
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readChatSessions() {
   const sessions = readJson(STORAGE_KEYS.chatSessions, []);
   return Array.isArray(sessions) ? sessions : [];
@@ -1089,6 +1113,51 @@ function getChatSessionsForUser(userId = getCurrentUserId()) {
     .filter((session) => session.id);
 }
 
+function shouldMergeChatSessions(previousSession, nextSession) {
+  const previousTime = getSessionPrimaryTime(previousSession);
+  const nextTime = getSessionPrimaryTime(nextSession);
+  if (!previousTime || !nextTime) {
+    return false;
+  }
+  if (!isSameCalendarDay(previousTime, nextTime)) {
+    return false;
+  }
+  return Math.max(0, nextTime - previousTime) <= CHAT_SESSION_MERGE_GAP_MS;
+}
+
+function getMergedChatSessionsForUser(userId = getCurrentUserId()) {
+  const sessions = getChatSessionsForUser(userId)
+    .slice()
+    .sort((a, b) => getSessionPrimaryTime(a) - getSessionPrimaryTime(b));
+
+  const merged = [];
+  sessions.forEach((session) => {
+    const last = merged[merged.length - 1];
+    if (!last || !shouldMergeChatSessions(last, session)) {
+      merged.push({
+        ...session,
+        sourceIds: [session.id]
+      });
+      return;
+    }
+
+    const title = String(session.title || "").trim();
+    const lastTitle = String(last.title || "").trim();
+    const mergedEntries = [...(Array.isArray(last.entries) ? last.entries : []), ...(Array.isArray(session.entries) ? session.entries : [])]
+      .sort((a, b) => (Number(a?.ts || 0) || 0) - (Number(b?.ts || 0) || 0))
+      .slice(-160);
+
+    last.startedAt = Math.min(Number(last.startedAt || 0) || Date.now(), Number(session.startedAt || 0) || Date.now());
+    last.updatedAt = Math.max(Number(last.updatedAt || 0), Number(session.updatedAt || 0));
+    last.page = String(session.page || last.page || "talk").trim() || "talk";
+    last.title = title || lastTitle || last.page || "anna";
+    last.entries = mergedEntries;
+    last.sourceIds = [...(Array.isArray(last.sourceIds) ? last.sourceIds : []), session.id];
+  });
+
+  return merged.sort((a, b) => getSessionPrimaryTime(b) - getSessionPrimaryTime(a));
+}
+
 function getCurrentPageLabel() {
   const path = String(window.location.pathname || "").toLowerCase();
   if (path.endsWith("startup.html")) {
@@ -1100,6 +1169,28 @@ function getCurrentPageLabel() {
   return "talk";
 }
 
+function findReusableChatSession(userId = getCurrentUserId()) {
+  const now = Date.now();
+  const sessions = getChatSessionsForUser(userId)
+    .slice()
+    .sort((a, b) => getSessionPrimaryTime(b) - getSessionPrimaryTime(a));
+  const latest = sessions[0];
+  if (!latest) {
+    return null;
+  }
+  const latestTime = getSessionPrimaryTime(latest);
+  if (!latestTime || !isSameCalendarDay(latestTime, now)) {
+    return null;
+  }
+  if (now - latestTime > CHAT_SESSION_MERGE_GAP_MS) {
+    return null;
+  }
+  if (Array.isArray(latest.entries) && latest.entries.length >= 80) {
+    return null;
+  }
+  return latest;
+}
+
 function ensureCurrentChatSession() {
   const userId = getCurrentUserId();
   const sessions = readChatSessions();
@@ -1108,6 +1199,12 @@ function ensureCurrentChatSession() {
   );
   if (existing) {
     return existing;
+  }
+
+  const reusable = findReusableChatSession(userId);
+  if (reusable) {
+    currentChatSessionId = reusable.id;
+    return reusable;
   }
 
   const now = Date.now();
@@ -1176,11 +1273,94 @@ function formatSessionTimestamp(ts) {
   }
 }
 
+function formatHistoryDayLabel(ts) {
+  if (!ts) {
+    return "recent";
+  }
+  try {
+    const value = new Date(ts);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    if (isSameCalendarDay(value, today)) {
+      return "today";
+    }
+    if (isSameCalendarDay(value, yesterday)) {
+      return "yesterday";
+    }
+    return value.toLocaleDateString([], {
+      weekday: "short",
+      month: "short",
+      day: "numeric"
+    });
+  } catch {
+    return "recent";
+  }
+}
+
+function getHistorySessionSnippet(session) {
+  const entries = Array.isArray(session?.entries) ? session.entries.slice(-2) : [];
+  const snippet = entries
+    .map((entry) => `${entry.role === "user" ? "you" : "anna"}: ${String(entry.text || "").trim()}`)
+    .join(" • ");
+  return snippet.slice(0, 220) || "open to view messages";
+}
+
+function getTaskEntriesForUser(userId = getCurrentUserId()) {
+  const orderedTitles = [];
+  const seen = new Set();
+
+  getLatestStartupItems(userId).forEach((title) => {
+    const normalized = normalizeTaskTitle(title);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    orderedTitles.push(normalized);
+  });
+
+  Object.values(getTaskStateMap(userId))
+    .sort((a, b) => (Number(b?.updatedAt || 0) || 0) - (Number(a?.updatedAt || 0) || 0))
+    .forEach((entry) => {
+      const normalized = normalizeTaskTitle(entry?.title);
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      orderedTitles.push(normalized);
+    });
+
+  return orderedTitles.map((title) => readTaskEntry(title, userId)).filter((entry) => entry?.title);
+}
+
+function buildTaskBoardContext(userId = getCurrentUserId(), limit = 18) {
+  return getTaskEntriesForUser(userId)
+    .slice(0, limit)
+    .map((entry) => {
+      const pieces = [`${entry.completed ? "[done]" : "[todo]"} ${entry.title}`];
+      const note = String(entry.notes || "").trim();
+      const subtasks = Array.isArray(entry.subtasks) ? entry.subtasks : [];
+      if (subtasks.length) {
+        const completedCount = subtasks.filter((item) => item.completed).length;
+        pieces.push(`subtasks ${completedCount}/${subtasks.length}`);
+        const preview = subtasks.slice(0, 4).map((item) => `${item.completed ? "[done]" : "[todo]"} ${item.title}`).join(", ");
+        if (preview) {
+          pieces.push(`subtask preview: ${preview}`);
+        }
+      }
+      if (note) {
+        pieces.push(`notes: ${note.slice(0, 220)}`);
+      }
+      return `- ${pieces.join(" · ")}`;
+    })
+    .join("\n");
+}
+
 function buildChatHistorySummary(userId = getCurrentUserId()) {
-  return getChatSessionsForUser(userId)
-    .filter((session) => session.id !== currentChatSessionId)
+  return getMergedChatSessionsForUser(userId)
+    .filter((session) => !Array.isArray(session.sourceIds) || !session.sourceIds.includes(currentChatSessionId))
     .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 3)
+    .slice(0, 5)
     .map((session) => {
       const sample = session.entries.slice(-4).map((entry) => `${entry.role}: ${entry.text.slice(0, 120)}`).join(" | ");
       const title = session.title || session.page || "anna";
@@ -1238,6 +1418,7 @@ function buildMessagesForApi() {
   const startupTaskLines = latestStartupItems
     .map((title) => `${readTaskEntry(title, currentUserId).completed ? "[done]" : "[todo]"} ${title}`)
     .join("\n");
+  const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
   const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
   const activeTaskNotes = String(activeTaskState?.notes || "").trim();
   const activeSubtasks = Array.isArray(activeTaskState?.subtasks)
@@ -1289,6 +1470,9 @@ function buildMessagesForApi() {
   if (startupTaskLines) {
     sysParts.push("current startup to-do list:\n" + startupTaskLines);
   }
+  if (taskBoardContext) {
+    sysParts.push("full saved task board with completion state, subtasks, and notes:\n" + taskBoardContext);
+  }
   if (activeTaskNotes) {
     sysParts.push(`active task notes:\n${activeTaskNotes.slice(0, 900)}`);
   }
@@ -1302,6 +1486,7 @@ function buildMessagesForApi() {
     sysParts.push("saved chat history from earlier sessions:\n" + chatHistorySummary);
   }
   sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
+  sysParts.push("if the user asks what is on the to-do list, what they were working on, or what happened earlier, answer directly from the saved task board, notes, and chat history above. do not ask them to repeat information that is already present.");
   sysParts.push("match the depth to the ask: casual when the user wants quick help, but go deep when they want to build, diagnose, or decide something important.");
   sysParts.push("when going deep, think like a real cofounder: define the problem, state a point of view, show tradeoffs, and turn the answer into concrete priorities, experiments, or next moves.");
   sysParts.push("for deeper business answers, naturally cover what is happening, what you recommend, and what the user should do next, but do not force obvious section labels unless they improve readability.");
@@ -3334,8 +3519,7 @@ function renderHistoryModal() {
     return;
   }
 
-  const sessions = getChatSessionsForUser()
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+  const sessions = getMergedChatSessionsForUser()
     .slice(0, 40);
 
   historyList.innerHTML = "";
@@ -3343,47 +3527,95 @@ function renderHistoryModal() {
     historyEmpty.classList.toggle("hidden", sessions.length > 0);
   }
 
+  if (!sessions.find((session) => session.id === expandedHistorySessionId)) {
+    expandedHistorySessionId = "";
+  }
+
+  const grouped = new Map();
   sessions.forEach((session) => {
-    const card = document.createElement("section");
-    card.className = "history-session";
+    const label = formatHistoryDayLabel(getSessionPrimaryTime(session));
+    const list = grouped.get(label) || [];
+    list.push(session);
+    grouped.set(label, list);
+  });
 
-    const header = document.createElement("div");
-    header.className = "history-session-header";
+  grouped.forEach((groupSessions, label) => {
+    const daySection = document.createElement("section");
+    daySection.className = "history-day-group";
 
-    const title = document.createElement("div");
-    title.className = "history-session-title";
-    title.textContent = session.title || session.page || "anna";
+    const dayTitle = document.createElement("div");
+    dayTitle.className = "history-day-title";
+    dayTitle.textContent = label;
+    daySection.appendChild(dayTitle);
 
-    const meta = document.createElement("div");
-    meta.className = "history-session-meta";
-    meta.textContent = `${formatSessionTimestamp(session.updatedAt)} · ${session.entries.length} messages`;
+    const dayList = document.createElement("div");
+    dayList.className = "history-day-list";
 
-    header.appendChild(title);
-    header.appendChild(meta);
-    card.appendChild(header);
+    groupSessions.forEach((session) => {
+      const isExpanded = expandedHistorySessionId === session.id;
+      const card = document.createElement("section");
+      card.className = `history-session${isExpanded ? " is-expanded" : ""}`;
 
-    const body = document.createElement("div");
-    body.className = "history-session-body";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "history-session-toggle";
+      toggle.setAttribute("aria-expanded", String(isExpanded));
+      toggle.addEventListener("click", () => {
+        expandedHistorySessionId = isExpanded ? "" : session.id;
+        renderHistoryModal();
+      });
 
-    session.entries.forEach((entry) => {
-      const row = document.createElement("div");
-      row.className = `history-entry ${entry.role === "user" ? "user" : "ai"}`;
+      const header = document.createElement("div");
+      header.className = "history-session-header";
 
-      const role = document.createElement("span");
-      role.className = "history-entry-role";
-      role.textContent = entry.role === "user" ? "you" : "anna";
+      const title = document.createElement("div");
+      title.className = "history-session-title";
+      title.textContent = session.title || session.page || "anna";
 
-      const text = document.createElement("p");
-      text.className = "history-entry-text";
-      text.textContent = entry.text;
+      const meta = document.createElement("div");
+      meta.className = "history-session-meta";
+      const mergedCount = Array.isArray(session.sourceIds) ? session.sourceIds.length : 1;
+      meta.textContent = `${formatSessionTimestamp(session.updatedAt)} · ${session.entries.length} messages${mergedCount > 1 ? ` · ${mergedCount} merged chats` : ""}`;
 
-      row.appendChild(role);
-      row.appendChild(text);
-      body.appendChild(row);
+      const snippet = document.createElement("div");
+      snippet.className = "history-session-snippet";
+      snippet.textContent = getHistorySessionSnippet(session);
+
+      header.appendChild(title);
+      header.appendChild(meta);
+      toggle.appendChild(header);
+      toggle.appendChild(snippet);
+      card.appendChild(toggle);
+
+      if (isExpanded) {
+        const body = document.createElement("div");
+        body.className = "history-session-body";
+
+        session.entries.forEach((entry) => {
+          const row = document.createElement("div");
+          row.className = `history-entry ${entry.role === "user" ? "user" : "ai"}`;
+
+          const role = document.createElement("span");
+          role.className = "history-entry-role";
+          role.textContent = entry.role === "user" ? "you" : "anna";
+
+          const text = document.createElement("p");
+          text.className = "history-entry-text";
+          text.textContent = entry.text;
+
+          row.appendChild(role);
+          row.appendChild(text);
+          body.appendChild(row);
+        });
+
+        card.appendChild(body);
+      }
+
+      dayList.appendChild(card);
     });
 
-    card.appendChild(body);
-    historyList.appendChild(card);
+    daySection.appendChild(dayList);
+    historyList.appendChild(daySection);
   });
 }
 
@@ -3631,6 +3863,7 @@ settingsRename?.addEventListener("click", () => {
 editProfile?.addEventListener("click", () => openAccountModal("name"));
 
 historyButton?.addEventListener("click", () => {
+  expandedHistorySessionId = "";
   renderHistoryModal();
   setModalOpen(settingsModal, false);
   setModalOpen(historyModal, true);
