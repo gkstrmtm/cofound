@@ -104,14 +104,14 @@ button {
 }
 
 .topbar-logo {
-  width: 20px;
+  width: 30px;
   display: flex;
   justify-content: flex-end;
 }
 
 .topbar-voice-button {
-  width: 20px;
-  height: 20px;
+  width: 30px;
+  height: 30px;
   border-radius: 999px;
   display: grid;
   place-items: center;
@@ -125,8 +125,8 @@ button {
 }
 
 .topbar-voice-logo {
-  width: 20px;
-  height: 20px;
+  width: 30px;
+  height: 30px;
 }
 
 .topbar-voice-button.is-listening .record-logo {
@@ -535,8 +535,8 @@ button {
 }
 
 .task-anna-button {
-  width: 20px;
-  height: 20px;
+  width: 30px;
+  height: 30px;
   border-radius: 999px;
   display: grid;
   place-items: center;
@@ -1057,6 +1057,14 @@ button {
 .record-logo {
   width: 74px;
   height: 74px;
+}
+
+.topbar-voice-button .anna-logo-small,
+.topbar-voice-button .record-logo,
+.task-anna-button .anna-logo-small,
+.task-anna-button .record-logo {
+  width: 30px;
+  height: 30px;
 }
 
 .anna-logo-modal {
