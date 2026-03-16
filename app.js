@@ -1916,13 +1916,8 @@ function unlockAudioFromGesture() {
   }
   audioUnlockAttempted = true;
 
-  // WebAudio resume (helps on iOS/Safari)
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (Ctx) {
-      audioCtx = audioCtx || new Ctx();
-      audioCtx.resume?.();
-    }
+    audioCtx?.resume?.();
   } catch {
     // ignore
   }
@@ -2716,6 +2711,10 @@ function playRecordBeep(isStarting) {
   try {
     const volume = getOutputVolume();
     if (volume <= 0.001) {
+      return;
+    }
+    const userActivation = navigator.userActivation;
+    if (userActivation && !userActivation.isActive && !audioCtx) {
       return;
     }
     const Ctx = window.AudioContext || window.webkitAudioContext;
