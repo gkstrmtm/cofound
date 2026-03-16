@@ -4,7 +4,7 @@ from typing import Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from openai import OpenAI
 
 
@@ -24,10 +24,21 @@ SYSTEM_PROMPT = (
     "priorities. if they ask for feedback, be honest. for deeper strategic answers, naturally organize "
     "your thinking around what is happening, what you recommend, and what should happen next, but only "
     "use explicit labels when they genuinely help clarity. do not force a rigid template onto casual "
-    "replies. ask at most one high-leverage question when missing information blocks a good answer. if "
-    "the user's idea is weak, say why and suggest a stronger direction. if the problem is promising, help "
+    "replies. never claim you are text-only, unable to speak, or unable to use voice unless the user "
+    "explicitly asks about a real system limitation. ask at most one high-leverage question when missing "
+    "information blocks a good answer. if the user's idea is weak, say why and suggest a stronger direction. if the problem is promising, help "
     "sharpen it into something sellable and executable."
 )
+
+cached_eleven_voice_id: Optional[str] = None
+
+
+def get_dotenv_values() -> dict:
+    try:
+        from dotenv import dotenv_values  # type: ignore
+    except Exception:
+        return {}
+    return dotenv_values(os.path.join(os.path.dirname(__file__), ".env")) or {}
 
 
 def get_api_key_status() -> tuple[Optional[str], str]:
@@ -47,14 +58,9 @@ def get_api_key_status() -> tuple[Optional[str], str]:
     if env_key:
         return (env_key, "env")
 
-    try:
-        from dotenv import dotenv_values  # type: ignore
-    except Exception:
-        return (None, "env-empty" if env_present else "dotenv-unavailable")
-
-    values = dotenv_values(os.path.join(os.path.dirname(__file__), ".env"))
+    values = get_dotenv_values()
     if not values:
-        return (None, "env-empty" if env_present else "missing")
+        return (None, "env-empty" if env_present else "dotenv-unavailable")
 
     if "OPENAI_API_KEY" not in values:
         return (None, "env-empty" if env_present else "missing")
@@ -66,6 +72,36 @@ def get_api_key_status() -> tuple[Optional[str], str]:
 def get_api_key() -> Optional[str]:
     key, _status = get_api_key_status()
     return key
+
+
+def get_elevenlabs_key() -> tuple[Optional[str], str]:
+    candidates = ["ELEVENLABS_API_KEY", "XI_API_KEY", "ELEVEN_LABS_API_KEY"]
+    for name in candidates:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value, name
+
+    values = get_dotenv_values()
+    for name in candidates:
+        value = (values.get(name) or "").strip()
+        if value:
+            return value, f"dotenv:{name}"
+
+    return None, ""
+
+
+def get_elevenlabs_model() -> str:
+    env_value = (os.environ.get("ELEVENLABS_MODEL") or "").strip()
+    if env_value:
+        return env_value
+    return (get_dotenv_values().get("ELEVENLABS_MODEL") or "eleven_turbo_v2_5").strip() or "eleven_turbo_v2_5"
+
+
+def get_elevenlabs_voice_id() -> str:
+    env_value = (os.environ.get("ELEVENLABS_VOICE_ID") or "").strip()
+    if env_value:
+        return env_value
+    return (get_dotenv_values().get("ELEVENLABS_VOICE_ID") or "").strip()
 
 
 def get_supabase_public_key() -> tuple[Optional[str], bool]:
@@ -115,6 +151,63 @@ def post_json(url: str, headers: dict[str, str], body: dict) -> tuple[int, dict]
             return exc.code, {"error": payload or f"http {exc.code}"}
 
 
+def get_json(url: str, headers: dict[str, str]) -> tuple[int, dict]:
+    req = urlrequest.Request(url, headers=headers, method="GET")
+    try:
+        with urlrequest.urlopen(req) as response:
+            payload = response.read().decode("utf-8")
+            return response.status, json.loads(payload or "{}")
+    except urlerror.HTTPError as exc:
+        payload = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(payload or "{}")
+        except Exception:
+            return exc.code, {"error": payload or f"http {exc.code}"}
+
+
+def post_binary(url: str, headers: dict[str, str], body: dict) -> tuple[int, bytes]:
+    req = urlrequest.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req) as response:
+            return response.status, response.read()
+    except urlerror.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def get_or_cache_elevenlabs_voice_id(api_key: str) -> str:
+    global cached_eleven_voice_id
+
+    configured = get_elevenlabs_voice_id()
+    if configured:
+        return configured
+    if cached_eleven_voice_id:
+        return cached_eleven_voice_id
+
+    status, data = get_json(
+        "https://api.elevenlabs.io/v1/voices",
+        {
+            "xi-api-key": api_key,
+            "accept": "application/json",
+        },
+    )
+    if status >= 400:
+        detail = data.get("detail") or data.get("error") or data.get("message") or f"http {status}"
+        raise RuntimeError(str(detail))
+
+    voices = data.get("voices") or []
+    first = voices[0] if isinstance(voices, list) and voices else {}
+    voice_id = str((first or {}).get("voice_id") or "").strip()
+    if not voice_id:
+        raise RuntimeError("no elevenlabs voices found")
+    cached_eleven_voice_id = voice_id
+    return voice_id
+
+
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -128,6 +221,7 @@ def static_proxy(path: str):
 @app.get("/api/health")
 def health():
     key, status = get_api_key_status()
+    eleven_key, eleven_source = get_elevenlabs_key()
     supabase_public_key, supabase_looks_secret = get_supabase_public_key()
     return jsonify(
         {
@@ -135,6 +229,10 @@ def health():
             "has_openai_key": bool(key),
             "openai_key_status": status,
             "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+            "has_elevenlabs_key": bool(eleven_key),
+            "elevenlabs_key_source": eleven_source or None,
+            "elevenlabs_model": get_elevenlabs_model(),
+            "has_elevenlabs_voice_id": bool(get_elevenlabs_voice_id()),
             "has_supabase": bool(
                 (os.environ.get("SUPABASE_URL") or "").strip() and supabase_public_key
             ),
@@ -236,6 +334,97 @@ def auth_signup():
         "requiresEmailConfirmation": not bool(data.get("session")),
         "redirectTo": redirect_to or None,
     })
+
+
+@app.get("/api/voices")
+def voices():
+    api_key, _source = get_elevenlabs_key()
+    if not api_key:
+        return jsonify({
+            "error": "missing elevenlabs api key",
+            "hint": "set ELEVENLABS_API_KEY (or XI_API_KEY) in your environment or .env",
+        }), 500
+
+    status, data = get_json(
+        "https://api.elevenlabs.io/v1/voices",
+        {
+            "xi-api-key": api_key,
+            "accept": "application/json",
+        },
+    )
+    if status >= 400:
+        detail = data.get("detail") or data.get("error") or data.get("message") or f"http {status}"
+        return jsonify({"error": "elevenlabs request failed", "detail": str(detail)}), 500
+
+    voices_payload = []
+    for voice in data.get("voices") or []:
+        voice_id = str((voice or {}).get("voice_id") or "").strip()
+        if not voice_id:
+            continue
+        labels = (voice or {}).get("labels") or {}
+        voices_payload.append(
+            {
+                "voice_id": voice_id,
+                "name": str((voice or {}).get("name") or "").strip(),
+                "category": str((voice or {}).get("category") or "").strip(),
+                "gender": str(labels.get("gender") or (voice or {}).get("gender") or "").strip().lower(),
+            }
+        )
+
+    return jsonify({"voices": voices_payload})
+
+
+@app.post("/api/tts")
+def tts():
+    api_key, source = get_elevenlabs_key()
+    if not api_key:
+        return jsonify({
+            "error": "missing elevenlabs api key",
+            "hint": "set ELEVENLABS_API_KEY (or XI_API_KEY) in your environment or .env",
+        }), 500
+
+    payload = request.get_json(silent=True) or {}
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+
+    requested_voice = str(payload.get("voiceId") or payload.get("voice_id") or "").strip()
+    try:
+        voice_id = requested_voice or get_or_cache_elevenlabs_voice_id(api_key)
+        status, audio = post_binary(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream",
+            {
+                "xi-api-key": api_key,
+                "Content-Type": "application/json",
+                "accept": "audio/mpeg",
+            },
+            {
+                "text": text,
+                "model_id": get_elevenlabs_model(),
+                "voice_settings": {
+                    "stability": 0.42,
+                    "similarity_boost": 0.78,
+                    "style": 0.12,
+                    "use_speaker_boost": True,
+                },
+            },
+        )
+    except Exception as exc:
+        return jsonify({"error": "elevenlabs request failed", "detail": str(exc)}), 500
+
+    if status >= 400:
+        try:
+            data = json.loads(audio.decode("utf-8") or "{}")
+            detail = data.get("detail") or data.get("error") or data.get("message") or f"http {status}"
+        except Exception:
+            detail = audio.decode("utf-8", errors="ignore") or f"http {status}"
+        return jsonify({"error": "elevenlabs request failed", "detail": str(detail)}), 500
+
+    response = Response(audio, status=200, mimetype="audio/mpeg")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Length"] = str(len(audio))
+    response.headers["X-ElevenLabs-Key-Source"] = source or "unknown"
+    return response
 
 
 @app.post("/api/chat")

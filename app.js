@@ -153,6 +153,7 @@ let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
 let ttsAudioEl = null;
+let ttsBrowserUtterance = null;
 let ttsFetchInFlight = 0;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
@@ -1812,6 +1813,88 @@ function renderVoiceSetting() {
   settingsVoice.textContent = name ? name : "auto";
 }
 
+function canUseBrowserTtsFallback() {
+  return typeof window !== "undefined" && "speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function";
+}
+
+function getPreferredBrowserTtsVoice() {
+  if (!canUseBrowserTtsFallback()) {
+    return null;
+  }
+  const synth = window.speechSynthesis;
+  const voices = Array.isArray(synth.getVoices?.()) ? synth.getVoices() : [];
+  if (!voices.length) {
+    return null;
+  }
+
+  const selectedName = getSelectedVoiceName().toLowerCase();
+  if (selectedName) {
+    const exact = voices.find((voice) => String(voice?.name || "").trim().toLowerCase() === selectedName);
+    if (exact) {
+      return exact;
+    }
+    const partial = voices.find((voice) => String(voice?.name || "").trim().toLowerCase().includes(selectedName));
+    if (partial) {
+      return partial;
+    }
+  }
+
+  return (
+    voices.find((voice) => /^en(-|_)/i.test(String(voice?.lang || ""))) ||
+    voices.find((voice) => /english/i.test(String(voice?.name || ""))) ||
+    voices[0] ||
+    null
+  );
+}
+
+function playBrowserTts(text, sessionId) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned || !canUseBrowserTtsFallback()) {
+    return false;
+  }
+
+  const synth = window.speechSynthesis;
+  const utterance = new window.SpeechSynthesisUtterance(cleaned);
+  const voice = getPreferredBrowserTtsVoice();
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang || "en-US";
+  } else {
+    utterance.lang = "en-US";
+  }
+  utterance.volume = getOutputVolume();
+  utterance.rate = 1;
+  utterance.pitch = 1;
+
+  ttsIsPlaying = true;
+  ttsBrowserUtterance = utterance;
+  ttsCurrentAudio = null;
+  ttsCurrentUrl = null;
+
+  const finish = () => {
+    if (ttsBrowserUtterance !== utterance) {
+      return;
+    }
+    ttsBrowserUtterance = null;
+    ttsIsPlaying = false;
+    playNextTts();
+    maybeResumeListeningAfterReply();
+  };
+
+  utterance.onend = finish;
+  utterance.onerror = finish;
+
+  try {
+    synth.cancel();
+    synth.speak(utterance);
+    return true;
+  } catch {
+    ttsBrowserUtterance = null;
+    ttsIsPlaying = false;
+    return false;
+  }
+}
+
 function stopAllTts() {
   ttsSessionId += 1;
   ttsQueue = [];
@@ -1830,6 +1913,15 @@ function stopAllTts() {
     }
   }
   ttsCurrentAudio = null;
+
+  if (ttsBrowserUtterance && canUseBrowserTtsFallback()) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  ttsBrowserUtterance = null;
 
   if (ttsCurrentUrl) {
     try {
@@ -1852,14 +1944,23 @@ function playNextTts() {
   if (!next) {
     return;
   }
-  const { url, sessionId } = next;
+  const { url, text, sessionId, mode } = next;
   if (sessionId !== ttsSessionId) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      // ignore
+    if (url) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
     }
     return playNextTts();
+  }
+
+  if (mode === "browser") {
+    if (!playBrowserTts(text, sessionId)) {
+      return playNextTts();
+    }
+    return;
   }
 
   ttsIsPlaying = true;
@@ -1948,6 +2049,8 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
         body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
       });
       if (!res.ok) {
+        ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
+        playNextTts();
         return;
       }
       const blob = await res.blob();
@@ -1959,7 +2062,8 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       playNextTts();
     })
     .catch(() => {
-      // ignore
+      ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
+      playNextTts();
     })
     .finally(() => {
       ttsFetchInFlight = Math.max(0, ttsFetchInFlight - 1);
@@ -2098,6 +2202,17 @@ function resolvePendingAnna(pendingId, text) {
   scrollTranscriptIfNeeded();
 }
 
+function sanitizeAnnaReplyText(text) {
+  return String(text || "")
+    .replace(
+      /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just )?text[- ]only|i (?:can't|cannot) speak(?: out loud)?|i don't have a voice here|no voice here)(?:[^.!?]*[.!?])?/gi,
+      " "
+    )
+    .replace(/\s{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function fetchAnnaReply() {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), 20000);
@@ -2230,7 +2345,7 @@ async function startStreamingAnnaReply(pendingId) {
 
   const final = await fetchAnnaReplyStream((delta) => {
     displayFull += delta;
-    setPendingAnnaText(pendingId, displayFull);
+    setPendingAnnaText(pendingId, sanitizeAnnaReplyText(displayFull) || "…");
 
     if (!isVoiceOutputEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
       return;
@@ -2242,7 +2357,7 @@ async function startStreamingAnnaReply(pendingId) {
     segments.forEach((seg) => enqueueElevenLabsTts(seg));
   });
 
-  const cleanedFinal = String(final || "").trim();
+  const cleanedFinal = sanitizeAnnaReplyText(final) || String(final || "").trim();
   resolvePendingAnna(pendingId, cleanedFinal);
   maybeShowListSheetFromAnna(cleanedFinal);
 
