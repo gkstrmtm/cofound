@@ -15,7 +15,76 @@ let cachedVoiceId = null;
 
 const { getElevenLabsKey } = require("./_elevenlabs");
 
-async function requestTtsAudio(apiKey, voiceId, text, modelId) {
+function normalizeErrorDetail(detail, fallback) {
+  if (typeof detail === "string") {
+    const text = detail.trim();
+    return text || fallback;
+  }
+
+  if (detail && typeof detail === "object") {
+    const nested =
+      detail.message ||
+      detail.detail ||
+      detail.error ||
+      detail.status ||
+      detail.code ||
+      detail.type;
+    if (typeof nested === "string" && nested.trim()) {
+      return nested.trim();
+    }
+    try {
+      const serialized = JSON.stringify(detail);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return fallback;
+}
+
+function buildRequestBodies(text, modelId) {
+  const requestedModel = String(modelId || "").trim();
+  const candidateModels = [
+    requestedModel,
+    "eleven_flash_v2_5",
+    "eleven_turbo_v2_5",
+    "eleven_multilingual_v2",
+    ""
+  ].filter((value, index, list) => list.indexOf(value) === index);
+
+  const bodies = [];
+  for (const candidateModel of candidateModels) {
+    const base = { text };
+    if (candidateModel) {
+      base.model_id = candidateModel;
+    }
+
+    bodies.push({
+      label: `${candidateModel || "default-model"}:voice-settings`,
+      body: {
+        ...base,
+        voice_settings: {
+          stability: 0.42,
+          similarity_boost: 0.78,
+          style: 0.12,
+          use_speaker_boost: true
+        }
+      }
+    });
+
+    bodies.push({
+      label: `${candidateModel || "default-model"}:plain`,
+      body: base
+    });
+  }
+
+  return bodies;
+}
+
+async function requestTtsAudio(apiKey, voiceId, payload) {
   return fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream`,
     {
@@ -25,18 +94,29 @@ async function requestTtsAudio(apiKey, voiceId, text, modelId) {
         "Content-Type": "application/json",
         accept: "audio/mpeg"
       },
-      body: JSON.stringify({
-        text,
-        model_id: modelId,
-        voice_settings: {
-          stability: 0.42,
-          similarity_boost: 0.78,
-          style: 0.12,
-          use_speaker_boost: true
-        }
-      })
+      body: JSON.stringify(payload)
     }
   );
+}
+
+async function requestTtsWithFallbacks(apiKey, voiceId, text, modelId) {
+  const attempts = [];
+
+  for (const candidate of buildRequestBodies(text, modelId)) {
+    const response = await requestTtsAudio(apiKey, voiceId, candidate.body);
+    if (response.ok) {
+      return { response, attempts };
+    }
+
+    const data = await response.json().catch(() => null);
+    const detail = normalizeErrorDetail(
+      data && (data.detail || data.error || data.message),
+      `elevenlabs http ${response.status}`
+    );
+    attempts.push(`${candidate.label} -> ${detail}`);
+  }
+
+  return { response: null, attempts };
 }
 
 async function getVoiceId(apiKey) {
@@ -109,21 +189,26 @@ module.exports = async (req, res) => {
 
   try {
     const primaryVoiceId = voiceOverride || (await getVoiceId(apiKey));
-    let elevenRes = await requestTtsAudio(apiKey, primaryVoiceId, text, modelId);
+    let { response: elevenRes, attempts } = await requestTtsWithFallbacks(apiKey, primaryVoiceId, text, modelId);
 
-    if (!elevenRes.ok && voiceOverride) {
+    if (!elevenRes && voiceOverride) {
       const fallbackVoiceId = await getVoiceId(apiKey);
       if (fallbackVoiceId && fallbackVoiceId !== primaryVoiceId) {
-        elevenRes = await requestTtsAudio(apiKey, fallbackVoiceId, text, modelId);
+        const retried = await requestTtsWithFallbacks(apiKey, fallbackVoiceId, text, modelId);
+        if (retried.response) {
+          elevenRes = retried.response;
+          attempts = attempts.concat(retried.attempts);
+        } else {
+          attempts = attempts.concat(retried.attempts.map((entry) => `fallback-voice ${entry}`));
+        }
       }
     }
 
-    if (!elevenRes.ok) {
-      const data = await elevenRes.json().catch(() => null);
-      const detail =
-        (data && (data.detail || data.error || data.message)) ||
-        `elevenlabs http ${elevenRes.status}`;
-      return res.status(500).json({ error: "elevenlabs request failed", detail: String(detail) });
+    if (!elevenRes) {
+      const detail = attempts.length
+        ? attempts.join(" | ")
+        : "elevenlabs request failed";
+      return res.status(500).json({ error: "elevenlabs request failed", detail });
     }
 
     const audioBuffer = Buffer.from(await elevenRes.arrayBuffer());
