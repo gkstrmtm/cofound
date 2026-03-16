@@ -18,10 +18,8 @@ const startupNameSave = document.getElementById("startupNameSave");
 const settingsModal = document.getElementById("settingsModal");
 const settingsStartupName = document.getElementById("settingsStartupName");
 const settingsRename = document.getElementById("settingsRename");
-const settingsUserName = document.getElementById("settingsUserName");
-const settingsUserEmail = document.getElementById("settingsUserEmail");
-const settingsPayment = document.getElementById("settingsPayment");
-const settingsSubscription = document.getElementById("settingsSubscription");
+const settingsProfile = document.getElementById("settingsProfile");
+const editProfile = document.getElementById("editProfile");
 const voiceRepliesToggle = document.getElementById("voiceRepliesToggle");
 const settingsVoice = document.getElementById("settingsVoice");
 const chooseVoice = document.getElementById("chooseVoice");
@@ -29,11 +27,6 @@ const chooseVoice = document.getElementById("chooseVoice");
 const voiceModal = document.getElementById("voiceModal");
 const voiceStatus = document.getElementById("voiceStatus");
 const voiceList = document.getElementById("voiceList");
-
-const editUserName = document.getElementById("editUserName");
-const editUserEmail = document.getElementById("editUserEmail");
-const editPayment = document.getElementById("editPayment");
-const editSubscription = document.getElementById("editSubscription");
 
 const accountModal = document.getElementById("accountModal");
 const accountName = document.getElementById("accountName");
@@ -78,6 +71,7 @@ let ttsCurrentUrl = null;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
 let audioCtx = null;
+let ttsFetchChain = Promise.resolve();
 
 const SILENT_WAV_DATA_URI =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
@@ -177,6 +171,7 @@ function stopAllTts() {
   ttsQueue = [];
   ttsIsPlaying = false;
   ttsNeedsUnlock = false;
+  ttsFetchChain = Promise.resolve();
 
   if (ttsCurrentAudio) {
     try {
@@ -277,26 +272,33 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
   }
 
   const mySession = ttsSessionId;
-  try {
-    const voiceId = String(voiceIdOverride || getSelectedVoiceId() || "").trim();
-    const res = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
+  const voiceId = String(voiceIdOverride || getSelectedVoiceId() || "").trim();
+
+  // Serialize fetches so audio enqueues in the same order as text segments.
+  ttsFetchChain = ttsFetchChain
+    .then(async () => {
+      if (mySession !== ttsSessionId) {
+        return;
+      }
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
+      });
+      if (!res.ok) {
+        return;
+      }
+      const blob = await res.blob();
+      if (mySession !== ttsSessionId) {
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      ttsQueue.push({ url, sessionId: mySession });
+      playNextTts();
+    })
+    .catch(() => {
+      // ignore
     });
-    if (!res.ok) {
-      return;
-    }
-    const blob = await res.blob();
-    if (mySession !== ttsSessionId) {
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    ttsQueue.push({ url, sessionId: mySession });
-    playNextTts();
-  } catch {
-    // ignore
-  }
 }
 
 function initBrandLogoImages() {
@@ -908,10 +910,14 @@ function renderStartupName() {
   const payment = getAccountValue(STORAGE_KEYS.paymentMethod);
   const subscription = getAccountValue(STORAGE_KEYS.subscription) || "starter";
 
-  if (settingsUserName) settingsUserName.textContent = userName || "not set";
-  if (settingsUserEmail) settingsUserEmail.textContent = userEmail || "not set";
-  if (settingsPayment) settingsPayment.textContent = payment || "not set";
-  if (settingsSubscription) settingsSubscription.textContent = subscription;
+  if (settingsProfile) {
+    const parts = [];
+    if (userName) parts.push(userName);
+    if (userEmail) parts.push(userEmail);
+    if (payment) parts.push(payment);
+    if (subscription) parts.push(subscription);
+    settingsProfile.textContent = parts.length ? parts.join(" • ") : "not set";
+  }
   renderVoiceSetting();
 }
 
@@ -1039,10 +1045,7 @@ settingsRename?.addEventListener("click", () => {
   startupNameButton?.click();
 });
 
-editUserName?.addEventListener("click", () => openAccountModal("name"));
-editUserEmail?.addEventListener("click", () => openAccountModal("email"));
-editPayment?.addEventListener("click", () => openAccountModal("payment"));
-editSubscription?.addEventListener("click", () => openAccountModal("subscription"));
+editProfile?.addEventListener("click", () => openAccountModal("name"));
 
 accountSave?.addEventListener("click", () => {
   const nextName = String(accountName?.value || "").trim();
