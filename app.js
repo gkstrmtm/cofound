@@ -136,6 +136,12 @@ let conversation = [];
 let isListeningNow = false;
 let lastToggleAt = 0;
 let typeComposerAllowBlur = false;
+let supabaseClient = null;
+let supabaseConfigured = false;
+let supabaseInitPromise = null;
+let remoteStateLoadedForUser = null;
+let remoteSaveTimer = null;
+let isApplyingRemoteSnapshot = false;
 
 let ttsSessionId = 0;
 let ttsQueue = [];
@@ -150,6 +156,21 @@ let ttsFetchChain = Promise.resolve();
 
 let isAdjustingVolume = false;
 
+const REMOTE_SYNC_TEXT_KEYS = new Set([
+  STORAGE_KEYS.startupName,
+  STORAGE_KEYS.userName,
+  STORAGE_KEYS.userEmail,
+  STORAGE_KEYS.paymentMethod,
+  STORAGE_KEYS.subscription
+]);
+
+const REMOTE_SYNC_JSON_KEYS = new Set([
+  STORAGE_KEYS.memoryLog,
+  STORAGE_KEYS.startupLists,
+  STORAGE_KEYS.taskState,
+  STORAGE_KEYS.activeTask
+]);
+
 function readJson(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -163,9 +184,197 @@ function readJson(key, fallback) {
 function writeJson(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    scheduleRemoteStateSave(key);
   } catch {
     // ignore
   }
+}
+
+function setStoredValue(key, value) {
+  try {
+    localStorage.setItem(key, String(value ?? ""));
+    scheduleRemoteStateSave(key);
+  } catch {
+    // ignore
+  }
+}
+
+function removeStoredValue(key) {
+  try {
+    localStorage.removeItem(key);
+    scheduleRemoteStateSave(key);
+  } catch {
+    // ignore
+  }
+}
+
+function clearAuthSession() {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.authUser);
+  } catch {
+    // ignore
+  }
+}
+
+function getPersistedSnapshot() {
+  const strings = {};
+  const json = {};
+
+  REMOTE_SYNC_TEXT_KEYS.forEach((key) => {
+    strings[key] = localStorage.getItem(key) || "";
+  });
+
+  REMOTE_SYNC_JSON_KEYS.forEach((key) => {
+    json[key] = readJson(key, key === STORAGE_KEYS.activeTask ? null : key === STORAGE_KEYS.taskState ? {} : []);
+  });
+
+  return { strings, json };
+}
+
+function applyPersistedSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return;
+  }
+
+  isApplyingRemoteSnapshot = true;
+  try {
+    const strings = snapshot.strings && typeof snapshot.strings === "object" ? snapshot.strings : {};
+    REMOTE_SYNC_TEXT_KEYS.forEach((key) => {
+      const value = String(strings[key] || "");
+      if (value) {
+        localStorage.setItem(key, value);
+      } else {
+        localStorage.removeItem(key);
+      }
+    });
+
+    const json = snapshot.json && typeof snapshot.json === "object" ? snapshot.json : {};
+    REMOTE_SYNC_JSON_KEYS.forEach((key) => {
+      const fallback = key === STORAGE_KEYS.activeTask ? null : key === STORAGE_KEYS.taskState ? {} : [];
+      const value = key in json ? json[key] : fallback;
+      if (value == null) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
+    });
+  } finally {
+    isApplyingRemoteSnapshot = false;
+  }
+}
+
+async function initSupabaseClient() {
+  if (supabaseInitPromise) {
+    return supabaseInitPromise;
+  }
+
+  supabaseInitPromise = (async () => {
+    try {
+      if (!window.supabase || typeof window.supabase.createClient !== "function") {
+        return null;
+      }
+      const res = await fetch("/api/public-config", { method: "GET" });
+      if (!res.ok) {
+        return null;
+      }
+      const data = await res.json();
+      const url = String(data?.supabaseUrl || "").trim();
+      const anonKey = String(data?.supabaseAnonKey || "").trim();
+      if (!url || !anonKey) {
+        return null;
+      }
+
+      supabaseClient = window.supabase.createClient(url, anonKey, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true
+        }
+      });
+      supabaseConfigured = true;
+      return supabaseClient;
+    } catch {
+      return null;
+    }
+  })();
+
+  return supabaseInitPromise;
+}
+
+async function getSupabaseClient() {
+  return initSupabaseClient();
+}
+
+async function loadRemoteStateForCurrentUser() {
+  const client = await getSupabaseClient();
+  const user = getAuthUser();
+  if (!client || !user?.email) {
+    return;
+  }
+  if (remoteStateLoadedForUser === user.email) {
+    return;
+  }
+
+  const { data, error } = await client
+    .from("anna_user_state")
+    .select("state")
+    .eq("email", user.email)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message || "couldn't load account state");
+  }
+
+  if (data?.state) {
+    applyPersistedSnapshot(data.state);
+  } else {
+    await saveRemoteStateNow();
+  }
+
+  remoteStateLoadedForUser = user.email;
+}
+
+async function saveRemoteStateNow() {
+  if (isApplyingRemoteSnapshot) {
+    return;
+  }
+  const client = await getSupabaseClient();
+  const user = getAuthUser();
+  if (!client || !user?.email) {
+    return;
+  }
+
+  const payload = {
+    email: user.email,
+    name: String(user.name || "").trim(),
+    state: getPersistedSnapshot(),
+    updated_at: new Date().toISOString()
+  };
+
+  const { error } = await client.from("anna_user_state").upsert(payload, { onConflict: "email" });
+  if (error) {
+    throw new Error(error.message || "couldn't save account state");
+  }
+}
+
+function scheduleRemoteStateSave(changedKey) {
+  if (isApplyingRemoteSnapshot) {
+    return;
+  }
+  if (!REMOTE_SYNC_TEXT_KEYS.has(changedKey) && !REMOTE_SYNC_JSON_KEYS.has(changedKey)) {
+    return;
+  }
+  if (!supabaseConfigured || !getAuthUser()?.email) {
+    return;
+  }
+  if (remoteSaveTimer) {
+    window.clearTimeout(remoteSaveTimer);
+  }
+  remoteSaveTimer = window.setTimeout(() => {
+    saveRemoteStateNow().catch(() => {
+      // ignore background sync errors; auth flows surface explicit errors separately
+    });
+  }, 260);
 }
 
 function normalizeEmail(raw) {
@@ -207,6 +416,9 @@ function writeAuthUsers(users) {
 }
 
 function hasAnyAuthUsers() {
+  if (supabaseConfigured) {
+    return true;
+  }
   const users = readAuthUsers();
   return Object.keys(users).length > 0;
 }
@@ -250,7 +462,7 @@ function openAuthModal(mode) {
   closeAllModals();
   setModalOpen(authModal, true);
 
-  const effectiveMode = mode || (hasAnyAuthUsers() ? "sign-in" : "sign-up");
+  const effectiveMode = mode || (supabaseConfigured ? "sign-in" : hasAnyAuthUsers() ? "sign-in" : "sign-up");
   setAuthMode(effectiveMode);
 
   if (effectiveMode === "sign-in") {
@@ -285,6 +497,31 @@ async function signUpWithPassword() {
     throw new Error("passwords don't match");
   }
 
+  const client = await getSupabaseClient();
+  if (client) {
+    const { data, error } = await client.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          name
+        }
+      }
+    });
+    if (error) {
+      throw new Error(error.message || "couldn't sign up");
+    }
+    if (!data?.session && data?.user) {
+      throw new Error("sign up worked, but email confirmation is on. confirm your email, then sign in.");
+    }
+    setAuthSession({
+      name: String(data?.user?.user_metadata?.name || name || "").trim(),
+      email: data?.user?.email || email
+    });
+    await loadRemoteStateForCurrentUser();
+    return;
+  }
+
   const users = readAuthUsers();
   if (users[email]) {
     throw new Error("account already exists. sign in instead.");
@@ -307,6 +544,20 @@ async function signInWithPassword() {
   if (!password) {
     authSignInPassword?.focus?.();
     throw new Error("password required");
+  }
+
+  const client = await getSupabaseClient();
+  if (client) {
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) {
+      throw new Error(error.message || "couldn't sign in");
+    }
+    setAuthSession({
+      name: String(data?.user?.user_metadata?.name || "").trim(),
+      email: data?.user?.email || email
+    });
+    await loadRemoteStateForCurrentUser();
+    return;
   }
 
   const users = readAuthUsers();
@@ -529,7 +780,7 @@ function readActiveTaskContext() {
 function setActiveTaskContext(title) {
   const normalized = normalizeTaskTitle(title);
   if (!normalized) {
-    localStorage.removeItem(STORAGE_KEYS.activeTask);
+    removeStoredValue(STORAGE_KEYS.activeTask);
     return null;
   }
   const context = {
@@ -1071,7 +1322,7 @@ function getOutputVolume() {
 }
 
 function setMuted(isMuted) {
-  localStorage.setItem(STORAGE_KEYS.outputMuted, isMuted ? "true" : "false");
+  setStoredValue(STORAGE_KEYS.outputMuted, isMuted ? "true" : "false");
   renderVolumeUi();
 
   renderVoiceRepliesSettingUi();
@@ -1089,7 +1340,7 @@ function setMuted(isMuted) {
 }
 
 function setStoredVolume(next) {
-  localStorage.setItem(STORAGE_KEYS.outputVolume, String(clamp01(next)));
+  setStoredValue(STORAGE_KEYS.outputVolume, String(clamp01(next)));
   renderVolumeUi();
   if (ttsCurrentAudio) {
     try {
@@ -1290,7 +1541,7 @@ function renderVoiceRepliesSettingUi() {
 }
 
 function setVoiceRepliesEnabled(enabled) {
-  localStorage.setItem(STORAGE_KEYS.voiceReplies, enabled ? "true" : "false");
+  setStoredValue(STORAGE_KEYS.voiceReplies, enabled ? "true" : "false");
   renderVoiceRepliesSettingUi();
   if (!isVoiceOutputEnabled()) {
     stopAllTts();
@@ -1309,14 +1560,14 @@ function setSelectedVoice(voiceId, voiceName) {
   const id = String(voiceId || "").trim();
   const name = String(voiceName || "").trim();
   if (id) {
-    localStorage.setItem(STORAGE_KEYS.elevenVoiceId, id);
+    setStoredValue(STORAGE_KEYS.elevenVoiceId, id);
   } else {
-    localStorage.removeItem(STORAGE_KEYS.elevenVoiceId);
+    removeStoredValue(STORAGE_KEYS.elevenVoiceId);
   }
   if (name) {
-    localStorage.setItem(STORAGE_KEYS.elevenVoiceName, name);
+    setStoredValue(STORAGE_KEYS.elevenVoiceName, name);
   } else {
-    localStorage.removeItem(STORAGE_KEYS.elevenVoiceName);
+    removeStoredValue(STORAGE_KEYS.elevenVoiceName);
   }
   renderVoiceSetting();
 }
@@ -2545,6 +2796,47 @@ function setSelectedSubscription(value) {
   });
 }
 
+function refreshUiFromStoredState() {
+  syncAuthIntoProfileFields();
+  renderStartupName();
+  renderTaskContextBanner();
+  renderStartupDashboard();
+  renderTaskWorkspace();
+  setSelectedSubscription(getAccountValue(STORAGE_KEYS.subscription) || "starter");
+}
+
+async function bootstrapAuthAndState() {
+  const client = await initSupabaseClient();
+  if (!client) {
+    refreshUiFromStoredState();
+    return;
+  }
+
+  const applySession = async (session) => {
+    if (session?.user?.email) {
+      setAuthSession({
+        email: session.user.email,
+        name: String(session.user.user_metadata?.name || getAccountValue(STORAGE_KEYS.userName) || "").trim()
+      });
+      remoteStateLoadedForUser = null;
+      await loadRemoteStateForCurrentUser();
+    } else {
+      clearAuthSession();
+      remoteStateLoadedForUser = null;
+    }
+    refreshUiFromStoredState();
+  };
+
+  const { data } = await client.auth.getSession();
+  await applySession(data?.session || null);
+
+  client.auth.onAuthStateChange((_event, session) => {
+    Promise.resolve(applySession(session)).catch((err) => {
+      setAuthError(err?.message || "couldn't restore account");
+    });
+  });
+}
+
 accountSubscriptionButton?.addEventListener("click", () => {
   setSelectedSubscription(getSelectedSubscription());
   setModalOpen(subscriptionModal, true);
@@ -2564,10 +2856,10 @@ function syncAuthIntoProfileFields() {
     return;
   }
   if (user.email && !getAccountValue(STORAGE_KEYS.userEmail)) {
-    localStorage.setItem(STORAGE_KEYS.userEmail, user.email);
+    setStoredValue(STORAGE_KEYS.userEmail, user.email);
   }
   if (user.name && !getAccountValue(STORAGE_KEYS.userName)) {
-    localStorage.setItem(STORAGE_KEYS.userName, user.name);
+    setStoredValue(STORAGE_KEYS.userName, user.name);
   }
 }
 
@@ -2706,7 +2998,7 @@ startupNameSave?.addEventListener("click", () => {
   if (!value) {
     return;
   }
-  localStorage.setItem(STORAGE_KEYS.startupName, value);
+  setStoredValue(STORAGE_KEYS.startupName, value);
   renderStartupName();
   setModalOpen(startupNameModal, false);
 });
@@ -2731,10 +3023,10 @@ accountSave?.addEventListener("click", () => {
   const nextPayment = String(accountPayment?.value || "").trim();
   const nextSub = getSelectedSubscription();
 
-  localStorage.setItem(STORAGE_KEYS.userName, nextName);
-  localStorage.setItem(STORAGE_KEYS.userEmail, nextEmail);
-  localStorage.setItem(STORAGE_KEYS.paymentMethod, nextPayment);
-  localStorage.setItem(STORAGE_KEYS.subscription, nextSub || "starter");
+  setStoredValue(STORAGE_KEYS.userName, nextName);
+  setStoredValue(STORAGE_KEYS.userEmail, nextEmail);
+  setStoredValue(STORAGE_KEYS.paymentMethod, nextPayment);
+  setStoredValue(STORAGE_KEYS.subscription, nextSub || "starter");
 
   // auth requires a password; keep it separate from profile edits.
 
@@ -2765,15 +3057,15 @@ accountSave?.addEventListener("click", () => {
   });
 
 initBrandLogoImages();
-syncAuthIntoProfileFields();
 syncTaskContextFromUrl();
-renderStartupName();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();
 renderVoiceRepliesSettingUi();
-renderTaskContextBanner();
 randomizeTryPrompt();
-renderStartupDashboard();
-renderTaskWorkspace();
+refreshUiFromStoredState();
+bootstrapAuthAndState().catch((err) => {
+  setAuthError(err?.message || "couldn't load account");
+  refreshUiFromStoredState();
+});
 ensureDefaultVoiceSelection();

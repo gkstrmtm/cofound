@@ -70,6 +70,25 @@ def health():
             "has_openai_key": bool(key),
             "openai_key_status": status,
             "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+            "has_supabase": bool(
+                (os.environ.get("SUPABASE_URL") or "").strip()
+                and (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+            ),
+        }
+    )
+
+
+@app.get("/api/public-config")
+def public_config():
+    return jsonify(
+        {
+            "ok": True,
+            "supabaseUrl": (os.environ.get("SUPABASE_URL") or "").strip(),
+            "supabaseAnonKey": (os.environ.get("SUPABASE_ANON_KEY") or "").strip(),
+            "hasSupabase": bool(
+                (os.environ.get("SUPABASE_URL") or "").strip()
+                and (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+            ),
         }
     )
 

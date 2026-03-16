@@ -13,14 +13,35 @@ set these in vercel project settings → environment variables:
 
 - `OPENAI_API_KEY` (required)
 - `OPENAI_MODEL` (optional, default `gpt-4.1-mini`)
+- `SUPABASE_URL` (recommended for real auth + saved progress)
+- `SUPABASE_ANON_KEY` (recommended for real auth + saved progress)
 
 deployments will auto-pick them up; you’ll paste real values in vercel.
+
+## supabase setup
+
+if you want sign-up/sign-in and progress to actually persist across devices, create a supabase project and do this:
+
+1. in supabase sql editor, run [supabase/schema.sql](supabase/schema.sql)
+2. copy your project url into `SUPABASE_URL`
+3. copy your anon/public key into `SUPABASE_ANON_KEY`
+4. in auth settings, disable email confirmation if you want instant password sign-up/sign-in during early testing
+
+the app stores one synced state blob per signed-in email, which includes:
+
+- profile fields
+- startup name
+- startup lists
+- task notes / subtasks / completion state
+- anna memory log and active task context
 
 ## local dev
 
 frontend-only (no ai): open `index.html`.
 
 to test `/api/*` locally, either deploy to vercel preview or use `vercel dev` if you have the vercel cli installed.
+
+the optional flask server also exposes `/api/public-config`, so local supabase auth works there too if your `.env` contains the supabase vars.
 
 ## files
 
