@@ -534,15 +534,40 @@ vercel-live-feedback,
 }
 
 @media (max-width: 520px) {
+  html,
+  body {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 244, 236, 0.96));
+  }
+
   .app-frame {
     height: 100dvh;
     min-height: 100dvh;
     border-radius: 0;
-    padding-inline: 0.85rem;
+    width: 100vw;
+    border: 0;
+    box-shadow: none;
+    padding: 0.9rem 0.85rem 0;
   }
 
   .prototype-layout {
     padding: 0;
+  }
+
+  .topbar {
+    padding-top: 0;
+  }
+
+  .chat-stage {
+    padding-top: 2.9rem;
+    padding-bottom: calc(6.1rem + env(safe-area-inset-bottom));
+  }
+
+  .logo-stage {
+    min-height: 170px;
+  }
+
+  .record-orb {
+    bottom: calc(1.05rem + env(safe-area-inset-bottom));
   }
 
   .anna-logo-large {
