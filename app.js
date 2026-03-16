@@ -134,6 +134,8 @@ const pendingEls = new Map();
 let conversation = [];
 
 let isListeningNow = false;
+let persistentListeningEnabled = false;
+let pendingResumeListening = false;
 let lastToggleAt = 0;
 let typeComposerAllowBlur = false;
 let supabaseClient = null;
@@ -149,12 +151,66 @@ let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
 let ttsAudioEl = null;
+let ttsFetchInFlight = 0;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
 let audioCtx = null;
 let ttsFetchChain = Promise.resolve();
 
 let isAdjustingVolume = false;
+
+function updateListeningUi() {
+  const isActive = persistentListeningEnabled || isListeningNow;
+  recordButton?.classList.toggle("listening", isActive);
+  appFrame?.classList.toggle("is-listening", isActive);
+}
+
+function stopSpeechRecognizer() {
+  if (!speechRecognizer) {
+    return;
+  }
+  try {
+    speechRecognizer.abort();
+  } catch {
+    try {
+      speechRecognizer.stop();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function resumePersistentListeningSoon(delay = 140) {
+  window.setTimeout(() => {
+    if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow || !speechRecognizer) {
+      return;
+    }
+    setListening(true);
+  }, delay);
+}
+
+function maybeResumeListeningAfterReply() {
+  if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow) {
+    return;
+  }
+  if (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0) {
+    return;
+  }
+  resumePersistentListeningSoon(120);
+}
+
+function pauseListeningForReply() {
+  if (!persistentListeningEnabled) {
+    setListening(false);
+    return;
+  }
+  pendingResumeListening = true;
+  isListeningNow = false;
+  interimText = "";
+  setInterim("");
+  updateListeningUi();
+  stopSpeechRecognizer();
+}
 
 const REMOTE_SYNC_TEXT_KEYS = new Set([
   STORAGE_KEYS.startupName,
@@ -1635,6 +1691,7 @@ function stopAllTts() {
   ttsSessionId += 1;
   ttsQueue = [];
   ttsIsPlaying = false;
+  ttsFetchInFlight = 0;
   ttsNeedsUnlock = false;
   ttsFetchChain = Promise.resolve();
 
@@ -1702,6 +1759,7 @@ function playNextTts() {
     }
     ttsCurrentUrl = null;
     playNextTts();
+    maybeResumeListeningAfterReply();
   };
 
   audio.onerror = () => {
@@ -1716,6 +1774,7 @@ function playNextTts() {
     }
     ttsCurrentUrl = null;
     playNextTts();
+    maybeResumeListeningAfterReply();
   };
 
   audio.play().catch(() => {
@@ -1751,6 +1810,8 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
         return;
       }
 
+      ttsFetchInFlight += 1;
+
       if (!voiceIdOverride && !getSelectedVoiceId()) {
         await ensureDefaultVoiceSelection();
       }
@@ -1774,6 +1835,10 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
     })
     .catch(() => {
       // ignore
+    })
+    .finally(() => {
+      ttsFetchInFlight = Math.max(0, ttsFetchInFlight - 1);
+      maybeResumeListeningAfterReply();
     });
 }
 
@@ -2063,6 +2128,8 @@ async function startStreamingAnnaReply(pendingId) {
     }
   }
 
+  maybeResumeListeningAfterReply();
+
   return cleanedFinal;
 }
 
@@ -2231,6 +2298,7 @@ function ensureSpeechRecognizer() {
         setInterim("");
         ensureStartedUi();
         if (!ensureSignedIn()) {
+          persistentListeningEnabled = false;
           setListening(false);
           return;
         }
@@ -2238,9 +2306,7 @@ function ensureSpeechRecognizer() {
         pushEntry("user", text);
         appendToMemory("user", text);
 
-        // stop listening once the user has finished a thought,
-        // so anna's spoken reply doesn't get blocked and doesn't echo back into the mic.
-        setListening(false);
+        pauseListeningForReply();
 
         conversation = [...conversation, { role: "user", content: text }].slice(-16);
         const pendingId = pushPendingAnna();
@@ -2255,6 +2321,9 @@ function ensureSpeechRecognizer() {
           .catch((err) => {
             const msg = err && err.message ? String(err.message) : "anna couldn't reply";
             resolvePendingAnna(pendingId, `anna couldn't reply: ${msg}`);
+          })
+          .finally(() => {
+            maybeResumeListeningAfterReply();
           });
       } else {
         nextInterim = text;
@@ -2269,12 +2338,17 @@ function ensureSpeechRecognizer() {
   };
 
   recognizer.onend = () => {
-    if (recordButton?.classList.contains("listening")) {
-      // safari/chrome may end unexpectedly; don't auto-restart aggressively
-      recordButton.classList.remove("listening");
-      appFrame?.classList.remove("is-listening");
-      isListeningNow = false;
+    isListeningNow = false;
+    if (persistentListeningEnabled) {
+      updateListeningUi();
+      if (pendingResumeListening) {
+        maybeResumeListeningAfterReply();
+      } else {
+        resumePersistentListeningSoon(180);
+      }
+      return;
     }
+    updateListeningUi();
   };
 
   return recognizer;
@@ -2287,6 +2361,9 @@ function setListening(isListening) {
 
   isListeningNow = isListening;
   if (isListening) {
+    pendingResumeListening = false;
+  }
+  if (isListening) {
     try {
       stopAllTts();
     } catch {
@@ -2294,8 +2371,7 @@ function setListening(isListening) {
     }
   }
 
-  recordButton.classList.toggle("listening", isListening);
-  appFrame?.classList.toggle("is-listening", isListening);
+  updateListeningUi();
 
   ensureStartedUi();
 
@@ -2327,24 +2403,14 @@ function setListening(isListening) {
         });
       }
       setModalOpen(textInputModal, true);
-    recordButton.classList.remove("listening");
-    appFrame?.classList.remove("is-listening");
+    persistentListeningEnabled = false;
+    updateListeningUi();
     return;
   }
 
   interimText = "";
   setInterim("");
-  if (speechRecognizer) {
-    try {
-      speechRecognizer.abort();
-    } catch {
-      try {
-        speechRecognizer.stop();
-      } catch {
-        // ignore
-      }
-    }
-  }
+  stopSpeechRecognizer();
 }
 
 typeInstead?.addEventListener("click", () => {
@@ -2601,9 +2667,11 @@ function toggleListeningFromTap(event) {
   }
   lastToggleAt = now;
 
-  const isListening = recordButton?.classList.contains("listening");
-  playRecordBeep(!isListening);
-  setListening(!isListening);
+  const nextActive = !persistentListeningEnabled;
+  persistentListeningEnabled = nextActive;
+  pendingResumeListening = false;
+  playRecordBeep(nextActive);
+  setListening(nextActive);
 }
 
 // single source of truth for tap handling (prevents double-fire)

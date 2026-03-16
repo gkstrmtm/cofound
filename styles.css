@@ -952,6 +952,11 @@ button {
   height: 60px;
 }
 
+.record-logo {
+  width: 74px;
+  height: 74px;
+}
+
 .anna-logo-modal {
   width: 92px;
   height: 92px;
@@ -1078,6 +1083,20 @@ button {
   display: grid;
   place-items: center;
   touch-action: manipulation;
+}
+
+.record-orb.listening .record-logo {
+  animation: record-rotate 5.8s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes record-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .switch {
