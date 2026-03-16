@@ -1,5 +1,8 @@
 const transcriptPane = document.getElementById("transcriptPane");
 const transcriptList = document.getElementById("transcriptList");
+const audioNotice = document.getElementById("audioNotice");
+const audioNoticeText = document.getElementById("audioNoticeText");
+const audioNoticeAction = document.getElementById("audioNoticeAction");
 const recordButton = document.getElementById("recordButton");
 const recordStack = document.getElementById("recordStack");
 const promptSeed = document.getElementById("promptSeed");
@@ -1513,7 +1516,7 @@ function renderStartupDashboard() {
   if (lastUpdatedEl) {
     lastUpdatedEl.textContent = latest?.ts
       ? formatRelativeTime(Date.now() - Number(latest.ts))
-      : "—";
+      : "not yet";
   }
 
   if (!startupTasksEl) {
@@ -1873,6 +1876,34 @@ async function routeTtsAudioToSystemOutput(audio) {
   }
 }
 
+function setAudioNotice(message) {
+  const text = String(message || "").trim();
+  if (audioNotice && audioNoticeText) {
+    audioNoticeText.textContent = text;
+    audioNotice.classList.toggle("hidden", !text);
+    audioNotice.setAttribute("aria-hidden", String(!text));
+  }
+  if (audioNoticeAction) {
+    audioNoticeAction.disabled = !text;
+  }
+  if (voiceStatus && text) {
+    voiceStatus.textContent = text;
+  }
+}
+
+function clearAudioNotice() {
+  if (audioNotice) {
+    audioNotice.classList.add("hidden");
+    audioNotice.setAttribute("aria-hidden", "true");
+  }
+  if (audioNoticeText) {
+    audioNoticeText.textContent = "";
+  }
+  if (audioNoticeAction) {
+    audioNoticeAction.disabled = true;
+  }
+}
+
 function unlockAudioFromGesture() {
   if (audioUnlockAttempted && !ttsNeedsUnlock) {
     return;
@@ -1923,6 +1954,7 @@ function unlockAudioFromGesture() {
   }
 
   ttsNeedsUnlock = false;
+  clearAudioNotice();
   playNextTts();
 }
 
@@ -2138,6 +2170,7 @@ function playNextTts() {
   audio.play().catch(() => {
     // Likely autoplay policy. Keep this chunk and retry after unlock.
     console.warn("anna tts play() was blocked; waiting for next user gesture to retry audio");
+    setAudioNotice("voice is ready, but your browser blocked playback. tap enable voice once, then anna will speak normally.");
     ttsNeedsUnlock = true;
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
@@ -2338,10 +2371,12 @@ function resolvePendingAnna(pendingId, text) {
 
 function sanitizeAnnaReplyText(text) {
   return String(text || "")
+    .replace(/[\u2013\u2014]/g, ", ")
     .replace(
-      /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just )?text[- ]only|i (?:can't|cannot) speak(?: out loud)?|i don't have a voice here|no voice here)(?:[^.!?]*[.!?])?/gi,
+      /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just |all )?text(?:[- ]based|[- ]only)?(?: here)?|i (?:can't|cannot) speak(?: out loud)?|i don't have a voice here|no voice here|you(?:'ll| will) need (?:a )?different setup for voice|voice (?:isn't|is not|isn’t) available here|i can only respond in text(?: here)?|unable to use voice here|can't do voice here)(?:[^.!?]*[.!?])?/gi,
       " "
     )
+    .replace(/\s+,/g, ",")
     .replace(/\s{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -2388,7 +2423,7 @@ async function fetchAnnaReply() {
   }
 
   const data = await response.json();
-  return String(data.reply || "").trim();
+  return sanitizeAnnaReplyText(String(data.reply || "").trim());
 }
 
 async function fetchAnnaReplyStream(onDelta) {
@@ -2488,15 +2523,20 @@ async function startStreamingAnnaReply(pendingId) {
     speakBuffer += delta;
     const { segments, remaining } = splitIntoSpeakableSegments(speakBuffer);
     speakBuffer = remaining;
-    segments.forEach((seg) => enqueueElevenLabsTts(seg));
+    segments.forEach((seg) => {
+      const cleanedSeg = sanitizeAnnaReplyText(seg);
+      if (cleanedSeg) {
+        enqueueElevenLabsTts(cleanedSeg);
+      }
+    });
   });
 
-  const cleanedFinal = sanitizeAnnaReplyText(final) || String(final || "").trim();
+  const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
   resolvePendingAnna(pendingId, cleanedFinal);
   maybeShowListSheetFromAnna(cleanedFinal);
 
   if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
-    const leftover = String(speakBuffer || "").trim();
+    const leftover = sanitizeAnnaReplyText(String(speakBuffer || "").trim());
     if (leftover) {
       enqueueElevenLabsTts(leftover);
     }
@@ -3526,6 +3566,10 @@ historyButton?.addEventListener("click", () => {
   renderHistoryModal();
   setModalOpen(settingsModal, false);
   setModalOpen(historyModal, true);
+});
+
+audioNoticeAction?.addEventListener("click", () => {
+  unlockAudioFromGesture();
 });
 
 accountSave?.addEventListener("click", () => {

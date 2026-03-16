@@ -1034,6 +1034,25 @@ button {
   max-width: 18ch;
 }
 
+.audio-notice {
+  display: grid;
+  gap: 0.7rem;
+  width: min(100%, 360px);
+  margin: 0.9rem auto 0;
+  padding: 0.95rem 1rem;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 154, 83, 0.16));
+  border: 1px solid rgba(255, 154, 83, 0.24);
+  box-shadow: 0 16px 32px rgba(39, 72, 0, 0.08);
+}
+
+.audio-notice-text {
+  color: var(--olive-deep);
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .transcript-pane {
   width: 100%;
   flex: 0 0 auto;
