@@ -6,11 +6,14 @@ const appFrame = document.querySelector(".app-frame");
 const typeInstead = document.getElementById("typeInstead");
 const promptTryText = document.getElementById("promptTryText");
 
+const typeComposer = document.getElementById("typeComposer");
+const typeComposerInput = document.getElementById("typeComposerInput");
+const typeComposerSend = document.getElementById("typeComposerSend");
+
 const volumeWrap = document.getElementById("volumeWrap");
 const volumeButton = document.getElementById("volumeButton");
 const volumePanel = document.getElementById("volumePanel");
 const volumeSlider = document.getElementById("volumeSlider");
-const muteButton = document.getElementById("muteButton");
 
 const menuButton = document.getElementById("menuButton");
 const menuDrawer = document.getElementById("menuDrawer");
@@ -91,10 +94,6 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, num));
 }
 
-function getMuted() {
-  return (localStorage.getItem(STORAGE_KEYS.outputMuted) || "false") === "true";
-}
-
 function getStoredVolume() {
   const raw = localStorage.getItem(STORAGE_KEYS.outputVolume);
   if (raw == null || raw === "") {
@@ -104,20 +103,7 @@ function getStoredVolume() {
 }
 
 function getOutputVolume() {
-  return getMuted() ? 0 : getStoredVolume();
-}
-
-function setMuted(isMuted) {
-  localStorage.setItem(STORAGE_KEYS.outputMuted, isMuted ? "true" : "false");
-  renderVolumeUi();
-  // update currently playing audio
-  if (ttsCurrentAudio) {
-    try {
-      ttsCurrentAudio.volume = getOutputVolume();
-    } catch {
-      // ignore
-    }
-  }
+  return getStoredVolume();
 }
 
 function setStoredVolume(next) {
@@ -144,11 +130,32 @@ function renderVolumeUi() {
   if (volumeSlider) {
     volumeSlider.value = String(Math.round(getStoredVolume() * 100));
   }
-  if (muteButton) {
-    const muted = getMuted();
-    muteButton.classList.toggle("is-muted", muted);
-    muteButton.textContent = muted ? "unmute" : "mute";
+}
+
+function setTypeComposerOpen(isOpen) {
+  if (!typeComposer) {
+    return;
   }
+  typeComposer.classList.toggle("open", isOpen);
+  typeComposer.setAttribute("aria-hidden", String(!isOpen));
+  if (!isOpen) {
+    typeComposer.style.bottom = "";
+  }
+}
+
+function updateTypeComposerKeyboardOffset() {
+  if (!typeComposer || !typeComposer.classList.contains("open")) {
+    return;
+  }
+  const vv = window.visualViewport;
+  if (!vv) {
+    return;
+  }
+  // Approx keyboard height on mobile (iOS/Android): innerHeight - visualViewport.height - offsetTop
+  const keyboardPx = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  const padding = 16;
+  const bottomPx = Math.max(padding, keyboardPx + padding);
+  typeComposer.style.bottom = `${bottomPx}px`;
 }
 
 const SILENT_WAV_DATA_URI =
@@ -936,48 +943,83 @@ function setListening(isListening) {
 
 typeInstead?.addEventListener("click", () => {
   unlockAudioFromGesture();
+  setListening(false);
   closeAllModals();
-  if (textInputField) {
-    textInputField.value = "";
+  setVolumePanelOpen(false);
+  setTypeComposerOpen(true);
+  if (typeComposerInput) {
+    typeComposerInput.value = "";
     requestAnimationFrame(() => {
-      textInputField.focus();
+      typeComposerInput.focus();
     });
   }
-  setModalOpen(textInputModal, true);
+  updateTypeComposerKeyboardOffset();
 });
 
-volumeButton?.addEventListener("click", (e) => {
+typeComposerSend?.addEventListener("click", () => {
+  unlockAudioFromGesture();
+  const value = String(typeComposerInput?.value || "").trim();
+  if (!value) {
+    return;
+  }
+  setTypeComposerOpen(false);
+  sendTypedToAnna(value);
+});
+
+typeComposerInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  const value = String(typeComposerInput?.value || "").trim();
+  if (!value) {
+    return;
+  }
+  setTypeComposerOpen(false);
+  sendTypedToAnna(value);
+});
+
+// volume: open/close should feel stable (no instant close)
+volumeButton?.addEventListener("pointerdown", (e) => {
   e.preventDefault();
+  e.stopPropagation();
   unlockAudioFromGesture();
   const isOpen = volumePanel?.classList.contains("open");
   setVolumePanelOpen(!isOpen);
 });
 
-muteButton?.addEventListener("click", (e) => {
-  e.preventDefault();
-  unlockAudioFromGesture();
-  setMuted(!getMuted());
+volumePanel?.addEventListener("pointerdown", (e) => {
+  e.stopPropagation();
 });
 
 volumeSlider?.addEventListener("input", () => {
   unlockAudioFromGesture();
   const next = clamp01(Number(volumeSlider.value) / 100);
   setStoredVolume(next);
-  if (next > 0.01 && getMuted()) {
-    setMuted(false);
-  }
 });
 
 document.addEventListener("pointerdown", (event) => {
+  // close inline composer if you tap away
+  if (typeComposer && typeComposer.classList.contains("open")) {
+    const path = event.composedPath ? event.composedPath() : [];
+    if (!(path.includes(typeComposer) || path.includes(typeInstead))) {
+      setTypeComposerOpen(false);
+    }
+  }
+
   if (!volumePanel || !volumePanel.classList.contains("open")) {
     return;
   }
-  const target = event.target;
-  if (volumeWrap && target && volumeWrap.contains && volumeWrap.contains(target)) {
+  const path = event.composedPath ? event.composedPath() : [];
+  if (path.includes(volumeWrap) || path.includes(volumeButton) || path.includes(volumePanel)) {
     return;
   }
   setVolumePanelOpen(false);
 });
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", updateTypeComposerKeyboardOffset);
+  window.visualViewport.addEventListener("scroll", updateTypeComposerKeyboardOffset);
+}
 
 function randomizeTryPrompt() {
   if (!promptTryText) {
@@ -1095,6 +1137,7 @@ function closeAllModals() {
     setModalOpen(textInputModal, false);
   setModalOpen(accountModal, false);
   setModalOpen(voiceModal, false);
+  setTypeComposerOpen(false);
   }
 
 function wireModalClose(modal) {

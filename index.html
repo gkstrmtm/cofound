@@ -33,10 +33,6 @@
             </button>
 
             <div class="volume-panel" id="volumePanel" aria-hidden="true">
-              <div class="volume-row">
-                <div class="volume-title">volume</div>
-                <button type="button" class="volume-mute" id="muteButton">mute</button>
-              </div>
               <input
                 id="volumeSlider"
                 class="volume-slider"
@@ -45,6 +41,7 @@
                 max="100"
                 step="1"
                 value="85"
+                orient="vertical"
                 aria-label="volume slider"
               />
             </div>
@@ -82,21 +79,34 @@
             <strong id="promptTryText">“hey anna, let’s build our first startup”</strong>
           </div>
 
-          <button type="button" class="type-instead" id="typeInstead">type instead</button>
-
           <div class="transcript-pane hidden" id="transcriptPane" aria-label="transcript">
             <div class="transcript-list" id="transcriptList"></div>
           </div>
 
         </section>
 
-        <button class="record-orb" id="recordButton" aria-label="talk">
-          <div class="anna-logo anna-logo-small" aria-hidden="true">
-            <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
-            <span class="logo-triangle"></span>
-            <span class="logo-orb"></span>
-          </div>
-        </button>
+        <div class="record-stack" id="recordStack">
+          <button class="record-orb" id="recordButton" aria-label="talk" type="button">
+            <div class="anna-logo anna-logo-small" aria-hidden="true">
+              <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+              <span class="logo-triangle"></span>
+              <span class="logo-orb"></span>
+            </div>
+          </button>
+          <button type="button" class="type-instead" id="typeInstead">type instead</button>
+        </div>
+
+        <div class="type-composer" id="typeComposer" aria-hidden="true">
+          <input
+            id="typeComposerInput"
+            class="type-composer-input"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            placeholder="type to anna"
+          />
+          <button type="button" class="type-composer-send" id="typeComposerSend">send</button>
+        </div>
 
         <section class="modal" id="startupNameModal" aria-hidden="true">
           <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
