@@ -164,6 +164,7 @@ let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
 let ttsAudioEl = null;
 let ttsFetchInFlight = 0;
+let annaReplyInFlight = false;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
 let audioCtx = null;
@@ -318,6 +319,9 @@ function resumePersistentListeningSoon(delay = 140) {
 
 function maybeResumeListeningAfterReply() {
   if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow) {
+    return;
+  }
+  if (annaReplyInFlight) {
     return;
   }
   if (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0) {
@@ -2563,39 +2567,43 @@ async function startStreamingAnnaReply(pendingId) {
 
   const sessionAtStart = ttsSessionId;
 
-  const final = await fetchAnnaReplyStream((delta) => {
-    displayFull += delta;
-    setPendingAnnaText(pendingId, sanitizeAnnaReplyText(displayFull) || "…");
+  annaReplyInFlight = true;
+  try {
+    const final = await fetchAnnaReplyStream((delta) => {
+      displayFull += delta;
+      setPendingAnnaText(pendingId, sanitizeAnnaReplyText(displayFull) || "…");
 
-    if (!isVoiceOutputEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
-      return;
-    }
-
-    speakBuffer += delta;
-    const { segments, remaining } = splitIntoSpeakableSegments(speakBuffer);
-    speakBuffer = remaining;
-    segments.forEach((seg) => {
-      const cleanedSeg = sanitizeAnnaReplyText(seg);
-      if (cleanedSeg) {
-        enqueueElevenLabsTts(cleanedSeg);
+      if (!isVoiceOutputEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
+        return;
       }
+
+      speakBuffer += delta;
+      const { segments, remaining } = splitIntoSpeakableSegments(speakBuffer);
+      speakBuffer = remaining;
+      segments.forEach((seg) => {
+        const cleanedSeg = sanitizeAnnaReplyText(seg);
+        if (cleanedSeg) {
+          enqueueElevenLabsTts(cleanedSeg);
+        }
+      });
     });
-  });
 
-  const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
-  resolvePendingAnna(pendingId, cleanedFinal);
-  maybeShowListSheetFromAnna(cleanedFinal);
+    const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
+    resolvePendingAnna(pendingId, cleanedFinal);
+    maybeShowListSheetFromAnna(cleanedFinal);
 
-  if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
-    const leftover = sanitizeAnnaReplyText(String(speakBuffer || "").trim());
-    if (leftover) {
-      enqueueElevenLabsTts(leftover);
+    if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
+      const leftover = sanitizeAnnaReplyText(String(speakBuffer || "").trim());
+      if (leftover) {
+        enqueueElevenLabsTts(leftover);
+      }
     }
+
+    return cleanedFinal;
+  } finally {
+    annaReplyInFlight = false;
+    maybeResumeListeningAfterReply();
   }
-
-  maybeResumeListeningAfterReply();
-
-  return cleanedFinal;
 }
 
 listSheetScrim?.addEventListener("click", () => setListSheetOpen(false));
