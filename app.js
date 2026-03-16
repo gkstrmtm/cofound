@@ -460,6 +460,10 @@ function splitIntoSpeakableSegments(buffer) {
 }
 
 async function startStreamingAnnaReply(pendingId) {
+  if (getVoiceRepliesEnabled() && !isListeningNow) {
+    stopAllTts();
+  }
+
   let displayFull = "";
   let speakBuffer = "";
 
