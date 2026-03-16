@@ -36,6 +36,7 @@ const taskSubtaskAdd = document.getElementById("taskSubtaskAdd");
 const taskSubtaskList = document.getElementById("taskSubtaskList");
 const inlineVoiceTray = document.getElementById("inlineVoiceTray");
 const inlineVoiceList = document.getElementById("inlineVoiceList");
+const inlineVoiceClose = document.getElementById("inlineVoiceClose");
 
 const listSheet = document.getElementById("listSheet");
 const listSheetScrim = document.getElementById("listSheetScrim");
@@ -191,10 +192,6 @@ function updateListeningUi() {
   recordButton?.classList.toggle("listening", isActive);
   inlineVoiceButton?.classList.toggle("is-listening", isActive);
   appFrame?.classList.toggle("is-listening", isActive);
-  const inlineVoiceImage = inlineVoiceButton?.querySelector?.("img.logo-image");
-  if (inlineVoiceImage) {
-    inlineVoiceImage.setAttribute("src", isActive ? "brand/record-button-logo.png" : "brand/1.png");
-  }
 }
 
 function clearInlineVoiceHideTimer() {
@@ -555,7 +552,7 @@ function maybeResumeListeningAfterReply() {
     pendingResumeListening = false;
     persistentListeningEnabled = false;
     updateListeningUi();
-    scheduleInlineVoiceTrayHide(8200);
+    scheduleInlineVoiceTrayHide(2400);
     startWakeWordMonitoring();
     return;
   }
@@ -1695,6 +1692,7 @@ function buildMessagesForApi() {
   }
   if (activeTask?.title) {
     sysParts.push(`active task the user is working on: ${activeTask.title}`);
+    sysParts.push("if the user says this task, this, the task i'm on, or what i'm doing right now, they mean the active task above unless they explicitly name a different task.");
   }
   if (startupTaskLines) {
     sysParts.push("current startup to-do list:\n" + startupTaskLines);
@@ -1744,20 +1742,11 @@ function setListSheetOpen(isOpen) {
 }
 
 function renderTaskContextBanner() {
-  if (!taskContextBanner || !taskContextText) {
+  if (!taskContextBanner) {
     return;
   }
-  const activeTask = readActiveTaskContext();
-  const isOpen = Boolean(activeTask?.title);
-  taskContextBanner.classList.toggle("hidden", !isOpen);
-  taskContextBanner.setAttribute("aria-hidden", String(!isOpen));
-  if (!isOpen) {
-    return;
-  }
-  taskContextText.textContent = activeTask.title;
-  if (taskContextBackLink) {
-    taskContextBackLink.href = activeTask.href;
-  }
+  taskContextBanner.classList.add("hidden");
+  taskContextBanner.setAttribute("aria-hidden", "true");
 }
 
 function escapeText(text) {
@@ -2753,14 +2742,12 @@ function appendLine(role, text, opts = {}) {
   if (opts.pendingId) {
     paragraph.dataset.pendingId = opts.pendingId;
   }
-  host.appendChild(paragraph);
   if (host === inlineVoiceList) {
+    host.innerHTML = "";
     setInlineVoiceTrayOpen(true);
     clearInlineVoiceHideTimer();
-    while (host.children.length > 3) {
-      host.firstElementChild?.remove();
-    }
   }
+  host.appendChild(paragraph);
   scrollTranscriptIfNeeded();
   return paragraph;
 }
@@ -2803,9 +2790,6 @@ function pushEntry(role, text) {
   transcriptEntries = [...transcriptEntries, { role, text: cleaned }].slice(-80);
   appendChatSessionEntry(role, cleaned);
   appendLine(role, cleaned);
-  if (!transcriptList) {
-    scheduleInlineVoiceTrayHide();
-  }
 }
 
 function pushPendingAnna() {
@@ -2858,9 +2842,6 @@ function resolvePendingAnna(pendingId, text) {
   pendingEls.delete(pendingId);
   if (cleaned && cleaned !== "…") {
     appendChatSessionEntry("ai", cleaned);
-  }
-  if (!transcriptList) {
-    scheduleInlineVoiceTrayHide(8400);
   }
   scrollTranscriptIfNeeded();
 }
@@ -3610,6 +3591,11 @@ inlineVoiceButton?.addEventListener("pointerdown", () => {
 inlineVoiceButton?.addEventListener("click", (event) => {
   event.preventDefault();
   startInlineVoiceCapture("tap");
+});
+
+inlineVoiceClose?.addEventListener("click", () => {
+  clearInlineVoiceHideTimer();
+  setInlineVoiceTrayOpen(false);
 });
 
 function setMenuOpen(isOpen) {

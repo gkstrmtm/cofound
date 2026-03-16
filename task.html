@@ -27,7 +27,7 @@
 
           <button class="task-anna-button topbar-voice-button" id="taskTalkButton" type="button" aria-label="talk to anna">
             <div class="anna-logo anna-logo-small topbar-voice-logo record-logo image-loaded" aria-hidden="true">
-              <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+              <img class="logo-image" src="brand/record-button-logo.png" alt="" decoding="async" />
               <span class="logo-triangle"></span>
               <span class="logo-orb"></span>
             </div>
@@ -35,6 +35,7 @@
         </header>
 
         <section class="inline-voice-tray hidden" id="inlineVoiceTray" aria-hidden="true" aria-live="polite">
+          <button class="inline-voice-close" id="inlineVoiceClose" type="button" aria-label="close voice update">×</button>
           <div class="inline-voice-list" id="inlineVoiceList"></div>
         </section>
 
@@ -51,7 +52,6 @@
         </aside>
 
         <section class="task-stage" id="taskStage" aria-live="polite">
-          <div class="task-hero-label">working on</div>
           <h1 class="task-page-title" id="taskPageTitle">task</h1>
 
           <div class="task-toolbar">

@@ -104,27 +104,29 @@ button {
 }
 
 .topbar-logo {
-  width: 42px;
+  width: 28px;
   display: flex;
   justify-content: flex-end;
 }
 
 .topbar-voice-button {
-  width: 46px;
-  height: 46px;
-  border-radius: 16px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.32);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   color: var(--olive);
   padding: 0;
   flex: 0 0 auto;
+  overflow: visible;
 }
 
 .topbar-voice-logo {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
 }
 
 .topbar-voice-button.is-listening .record-logo {
@@ -133,12 +135,12 @@ button {
 }
 
 .topbar-voice-button.is-listening {
-  box-shadow: 0 16px 32px rgba(255, 154, 83, 0.18);
+  filter: drop-shadow(0 8px 16px rgba(255, 154, 83, 0.26));
 }
 
 .inline-voice-tray {
   position: absolute;
-  top: 4.45rem;
+  top: 4.15rem;
   left: 0.85rem;
   right: 0.85rem;
   z-index: 4;
@@ -151,6 +153,7 @@ button {
 .inline-voice-tray.open {
   opacity: 1;
   transform: translateY(0);
+  pointer-events: auto;
 }
 
 .inline-voice-list {
@@ -161,26 +164,42 @@ button {
 .inline-voice-list .transcript-line {
   margin: 0;
   text-align: left;
-  font-size: 0.98rem;
-  line-height: 1.42;
-  padding: 0.8rem 0.9rem;
+  font-size: 1rem;
+  line-height: 1.46;
+  padding: 0.95rem 2.8rem 0.95rem 1rem;
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(126, 178, 88, 0.12));
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  box-shadow: 0 16px 30px rgba(39, 72, 0, 0.1);
+  background: linear-gradient(180deg, rgba(27, 42, 10, 0.94), rgba(20, 30, 7, 0.94));
+  border: 1px solid rgba(255, 227, 117, 0.16);
+  box-shadow: 0 18px 34px rgba(8, 14, 2, 0.34);
 }
 
 .inline-voice-list .transcript-line.ai {
-  color: var(--peach);
+  color: #ffd6b9;
 }
 
 .inline-voice-list .transcript-line.user,
 .inline-voice-list .transcript-line.inline-voice-status {
-  color: var(--olive);
+  color: #e9f5d1;
 }
 
 .inline-voice-list .transcript-line.interim {
   opacity: 0.78;
+}
+
+.inline-voice-close {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 1rem;
+  z-index: 1;
 }
 
 .task-context-banner {
