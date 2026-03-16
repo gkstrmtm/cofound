@@ -113,6 +113,9 @@ button {
   -webkit-backdrop-filter: blur(18px) saturate(160%);
   border: 1px solid var(--glass-border);
   box-shadow: 0 18px 38px rgba(39, 72, 0, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0;
   transform: translateX(-50%) translateY(-6px) scaleY(0.92);
   transform-origin: top;
@@ -128,8 +131,11 @@ button {
 }
 
 .volume-slider {
-  width: 100%;
+  width: 28px;
   height: 100%;
+  display: block;
+  margin: 0 auto;
+  padding: 0;
   accent-color: var(--peach);
   writing-mode: bt-lr;
   -webkit-appearance: slider-vertical;
@@ -141,6 +147,7 @@ button {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.38);
+  margin: 0 auto;
 }
 
 .volume-slider::-webkit-slider-thumb {

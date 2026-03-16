@@ -86,6 +86,17 @@ let audioUnlockAttempted = false;
 let audioCtx = null;
 let ttsFetchChain = Promise.resolve();
 
+function ensureStartedUi() {
+  if (!appFrame || !transcriptPane) {
+    return;
+  }
+  if (!hasStarted) {
+    hasStarted = true;
+    appFrame.classList.add("has-started");
+  }
+  transcriptPane.classList.remove("hidden");
+}
+
 function clamp01(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -889,13 +900,11 @@ function setListening(isListening) {
   recordButton.classList.toggle("listening", isListening);
   appFrame?.classList.toggle("is-listening", isListening);
 
-  if (!hasStarted) {
-    hasStarted = true;
-    appFrame?.classList.add("has-started");
-  }
+  ensureStartedUi();
 
   if (isListening) {
-    transcriptPane.classList.remove("hidden");
+    // ensure transcript visible when starting voice
+    ensureStartedUi();
     scrollTranscriptIfNeeded();
 
     if (!speechRecognizer) {
@@ -946,6 +955,7 @@ typeInstead?.addEventListener("click", () => {
   setListening(false);
   closeAllModals();
   setVolumePanelOpen(false);
+  ensureStartedUi();
   setTypeComposerOpen(true);
   if (typeComposerInput) {
     typeComposerInput.value = "";
@@ -991,6 +1001,11 @@ volumePanel?.addEventListener("pointerdown", (e) => {
   e.stopPropagation();
 });
 
+volumeSlider?.addEventListener("pointerdown", (e) => {
+  // prevent the global outside-click handler from closing while dragging
+  e.stopPropagation();
+});
+
 volumeSlider?.addEventListener("input", () => {
   unlockAudioFromGesture();
   const next = clamp01(Number(volumeSlider.value) / 100);
@@ -1000,8 +1015,15 @@ volumeSlider?.addEventListener("input", () => {
 document.addEventListener("pointerdown", (event) => {
   // close inline composer if you tap away
   if (typeComposer && typeComposer.classList.contains("open")) {
-    const path = event.composedPath ? event.composedPath() : [];
-    if (!(path.includes(typeComposer) || path.includes(typeInstead))) {
+    const target = event.target;
+    const path = event.composedPath ? event.composedPath() : null;
+    const isInsideComposer =
+      (path && (path.includes(typeComposer) || path.includes(typeInstead))) ||
+      (!!target &&
+        ((typeComposer.contains && typeComposer.contains(target)) ||
+          (typeInstead && typeInstead.contains && typeInstead.contains(target))));
+
+    if (!isInsideComposer) {
       setTypeComposerOpen(false);
     }
   }
@@ -1009,8 +1031,16 @@ document.addEventListener("pointerdown", (event) => {
   if (!volumePanel || !volumePanel.classList.contains("open")) {
     return;
   }
-  const path = event.composedPath ? event.composedPath() : [];
-  if (path.includes(volumeWrap) || path.includes(volumeButton) || path.includes(volumePanel)) {
+  const target = event.target;
+  const path = event.composedPath ? event.composedPath() : null;
+  const isInsideVolume =
+    (path && (path.includes(volumeWrap) || path.includes(volumeButton) || path.includes(volumePanel))) ||
+    (!!target &&
+      ((volumeWrap && volumeWrap.contains && volumeWrap.contains(target)) ||
+        (volumePanel && volumePanel.contains && volumePanel.contains(target)) ||
+        (volumeButton && volumeButton.contains && volumeButton.contains(target))));
+
+  if (isInsideVolume) {
     return;
   }
   setVolumePanelOpen(false);
@@ -1184,6 +1214,8 @@ function sendTypedToAnna(rawText) {
   if (!lower) {
     return;
   }
+
+  ensureStartedUi();
 
   pushEntry("user", lower);
   conversation = [...conversation, { role: "user", content: lower }].slice(-16);
