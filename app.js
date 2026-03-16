@@ -1735,7 +1735,11 @@ function getMuted() {
 }
 
 function getOutputVolume() {
-  return getMuted() ? 0 : getStoredVolume();
+  if (getMuted()) {
+    return 0;
+  }
+  const stored = getStoredVolume();
+  return stored <= 0.001 ? 0.85 : stored;
 }
 
 function setMuted(isMuted) {
