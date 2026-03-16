@@ -511,7 +511,7 @@ function startWakeWordMonitoring() {
     return;
   }
   passiveWakeWordEnabled = true;
-  if (isListeningNow || persistentListeningEnabled || annaReplyInFlight) {
+  if (isListeningNow || annaReplyInFlight || (persistentListeningEnabled && !singleTurnVoiceMode)) {
     return;
   }
   if (!wakeWordRecognizer) {
@@ -1694,6 +1694,11 @@ function buildMessagesForApi() {
     sysParts.push(`active task the user is working on: ${activeTask.title}`);
     sysParts.push("if the user says this task, this, the task i'm on, or what i'm doing right now, they mean the active task above unless they explicitly name a different task.");
   }
+  if (getCurrentPageLabel() === "task") {
+    sysParts.push("the user is currently inside the task workspace for the active task above. default to helping with that task and do not ask which task they mean unless they explicitly name a different one.");
+    sysParts.push("for task help, keep replies short by default, usually 1 to 3 sentences or a tight bullet list. only go long when the user asks for detail or the problem genuinely needs it.");
+    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save a working note, include a line that starts with 'notes:' followed by the note.");
+  }
   if (startupTaskLines) {
     sysParts.push("current startup to-do list:\n" + startupTaskLines);
   }
@@ -1878,6 +1883,51 @@ function maybeShowListSheetFromAnna(text) {
   setListSheetOpen(true);
 
   persistStartupList(extracted);
+}
+
+function maybeApplyTaskWorkspaceSuggestionsFromAnna(text) {
+  if (getCurrentPageLabel() !== "task") {
+    return;
+  }
+  const activeTitle = getCurrentTaskTitle();
+  if (!activeTitle) {
+    return;
+  }
+
+  let changed = false;
+  const extracted = extractListFromText(text);
+  if (extracted && String(extracted.title || "").trim().toLowerCase() !== "resources") {
+    const existing = new Set(
+      readTaskEntry(activeTitle).subtasks.map((item) => normalizeTaskTitle(item.title)).filter(Boolean)
+    );
+    extracted.items.forEach((item) => {
+      const normalized = normalizeTaskTitle(item);
+      if (!normalized || existing.has(normalized)) {
+        return;
+      }
+      addTaskSubtask(activeTitle, normalized);
+      existing.add(normalized);
+      changed = true;
+    });
+  }
+
+  const noteMatch = String(text || "").match(/(?:^|\n)notes:\s*([\s\S]{1,500})/i);
+  const noteText = String(noteMatch?.[1] || "")
+    .split(/\n\n|\n[-*•]\s+/)[0]
+    .trim();
+  if (noteText) {
+    const currentNotes = String(readTaskEntry(activeTitle).notes || "").trim();
+    if (!currentNotes.toLowerCase().includes(noteText.toLowerCase())) {
+      const nextNotes = currentNotes ? `${currentNotes}\n\n${noteText}` : noteText;
+      setTaskNotes(activeTitle, nextNotes.slice(0, 4000));
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    renderTaskWorkspace();
+    renderStartupDashboard();
+  }
 }
 
 function readStartupLists() {
@@ -2587,6 +2637,10 @@ function playNextTts() {
   audio.volume = getOutputVolume();
   ttsCurrentAudio = audio;
 
+  if (singleTurnVoiceMode && shouldUseWakeWordMode() && !wakeWordListeningNow) {
+    startWakeWordMonitoring();
+  }
+
   audio.onended = () => {
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
@@ -3014,6 +3068,7 @@ async function startStreamingAnnaReply(pendingId) {
     const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
     resolvePendingAnna(pendingId, cleanedFinal);
     maybeShowListSheetFromAnna(cleanedFinal);
+    maybeApplyTaskWorkspaceSuggestionsFromAnna(cleanedFinal);
 
     if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
       const leftover = sanitizeAnnaReplyText(String(speakBuffer || "").trim());
