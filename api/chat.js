@@ -79,12 +79,22 @@ module.exports = async (req, res) => {
     const data = await openaiRes.json().catch(() => null);
     if (!openaiRes.ok) {
       const detail =
-        (data && (data.error?.message || data.error || data.message)) ||
+        (data && (data.error?.message || data.error?.type || data.error || data.message)) ||
         `openai http ${openaiRes.status}`;
-      return res.status(500).json({ error: "openai request failed", detail });
+      return res.status(500).json({
+        error: "openai request failed",
+        detail,
+        status: openaiRes.status
+      });
     }
 
     const text = String((data && data.output_text) || "").trim();
+    if (!text) {
+      return res.status(500).json({
+        error: "openai request failed",
+        detail: "empty reply"
+      });
+    }
     return res.status(200).json({ reply: text });
   } catch (err) {
     const message = err && err.message ? String(err.message) : "openai request failed";

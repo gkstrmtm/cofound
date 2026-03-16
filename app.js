@@ -1,4 +1,5 @@
-const transcriptStack = document.getElementById("transcriptStack");
+const transcriptPane = document.getElementById("transcriptPane");
+const transcriptList = document.getElementById("transcriptList");
 const recordButton = document.getElementById("recordButton");
 const promptSeed = document.getElementById("promptSeed");
 const appFrame = document.querySelector(".app-frame");
@@ -8,6 +9,21 @@ const menuDrawer = document.getElementById("menuDrawer");
 const menuScrim = document.getElementById("menuScrim");
 const menuClose = document.getElementById("menuClose");
 const startupNameButton = document.getElementById("startupNameButton");
+const settingsButton = document.getElementById("settingsButton");
+
+const startupNameModal = document.getElementById("startupNameModal");
+const startupNameInput = document.getElementById("startupNameInput");
+const startupNameSave = document.getElementById("startupNameSave");
+
+const settingsModal = document.getElementById("settingsModal");
+const settingsStartupName = document.getElementById("settingsStartupName");
+const settingsRename = document.getElementById("settingsRename");
+const clearTranscript = document.getElementById("clearTranscript");
+const clearConversation = document.getElementById("clearConversation");
+
+const textInputModal = document.getElementById("textInputModal");
+const textInputField = document.getElementById("textInputField");
+const textInputSend = document.getElementById("textInputSend");
 
 const STORAGE_KEYS = {
   startupName: "anna:startupName"
@@ -41,26 +57,33 @@ function initBrandLogoImages() {
 }
 
 function renderTranscript() {
-  if (!transcriptStack) {
+  if (!transcriptPane || !transcriptList) {
     return;
   }
 
-  transcriptStack.innerHTML = "";
+  const stickToBottom =
+    transcriptPane.scrollHeight - transcriptPane.scrollTop - transcriptPane.clientHeight < 28;
 
-  const lines = interimText
-    ? [{ role: "user", text: interimText, interim: true }, ...transcriptEntries]
-    : transcriptEntries;
+  transcriptList.innerHTML = "";
 
-  const display = lines.slice(0, 4);
+  const lines = transcriptEntries.slice(-60);
+  if (interimText) {
+    lines.push({ role: "user", text: interimText, interim: true });
+  }
 
-  display.forEach((entry, index) => {
+  lines.forEach((entry) => {
     const paragraph = document.createElement("p");
-    paragraph.className = `transcript-line ${entry.role}`;
+    const isInterim = Boolean(entry.interim);
+    paragraph.className = `transcript-line ${entry.role}${isInterim ? " interim" : ""}`;
     paragraph.textContent = `“${entry.text}”`;
-    paragraph.style.setProperty("--line-offset", `${index * 3.2}rem`);
-    paragraph.style.setProperty("--line-opacity", String(1 - index * 0.22));
-    transcriptStack.appendChild(paragraph);
+    transcriptList.appendChild(paragraph);
   });
+
+  if (stickToBottom) {
+    requestAnimationFrame(() => {
+      transcriptPane.scrollTop = transcriptPane.scrollHeight;
+    });
+  }
 }
 
 function pushEntry(role, text) {
@@ -69,21 +92,13 @@ function pushEntry(role, text) {
     return;
   }
 
-  transcriptEntries = [{ role, text: cleaned }, ...transcriptEntries].slice(0, 8);
+  transcriptEntries = [...transcriptEntries, { role, text: cleaned }].slice(-80);
   renderTranscript();
 }
 
 function pushPendingAnna() {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const pending = { role: "ai", text: "…", pendingId: id };
-  const next = transcriptEntries.slice();
-  const insertAfterIndex = next.findIndex((entry) => entry.role === "user");
-  if (insertAfterIndex === -1) {
-    next.unshift(pending);
-  } else {
-    next.splice(insertAfterIndex + 1, 0, pending);
-  }
-  transcriptEntries = next.slice(0, 8);
+  transcriptEntries = [...transcriptEntries, { role: "ai", text: "…", pendingId: id }].slice(-80);
   renderTranscript();
   return id;
 }
@@ -120,7 +135,9 @@ async function fetchAnnaReply() {
     let message = `http ${response.status}`;
     try {
       const data = await response.json();
-      if (data?.error) {
+      if (data?.detail) {
+        message = String(data.detail);
+      } else if (data?.error) {
         message = String(data.error);
       }
     } catch {
@@ -173,9 +190,9 @@ function ensureSpeechRecognizer() {
             conversation = [...conversation, { role: "assistant", content: normalized }].slice(-16);
             resolvePendingAnna(pendingId, normalized);
           })
-          .catch(() => {
-            resolvePendingAnna(pendingId, "openai isn't configured yet. open the menu and set the key in .env, then refresh."
-            );
+          .catch((err) => {
+            const msg = err && err.message ? String(err.message) : "anna couldn't reply";
+            resolvePendingAnna(pendingId, `anna couldn't reply: ${msg}`);
           });
       } else {
         nextInterim = text;
@@ -202,7 +219,7 @@ function ensureSpeechRecognizer() {
 }
 
 function setListening(isListening) {
-  if (!recordButton || !transcriptStack) {
+  if (!recordButton || !transcriptPane) {
     return;
   }
 
@@ -215,7 +232,7 @@ function setListening(isListening) {
   }
 
   if (isListening) {
-    transcriptStack.classList.remove("hidden");
+    transcriptPane.classList.remove("hidden");
     renderTranscript();
 
     if (!speechRecognizer) {
@@ -232,25 +249,15 @@ function setListening(isListening) {
     }
 
     // fallback: typed line via prompt (still real input)
-    const typed = window.prompt("say something to anna");
-    if (typed) {
-      const lower = String(typed).trim().toLowerCase();
-      pushEntry("user", lower);
-
-      conversation = [...conversation, { role: "user", content: lower }].slice(-16);
-      const pendingId = pushPendingAnna();
-
-      fetchAnnaReply()
-        .then((reply) => {
-          const normalized = reply.toLowerCase();
-          conversation = [...conversation, { role: "assistant", content: normalized }].slice(-16);
-          resolvePendingAnna(pendingId, normalized);
-        })
-        .catch(() => {
-          resolvePendingAnna(pendingId, "openai isn't configured yet. open the menu and set the key in .env, then refresh."
-          );
+    // fallback if speech recognition isn't available
+      closeAllModals();
+      if (textInputField) {
+        textInputField.value = "";
+        requestAnimationFrame(() => {
+          textInputField.focus();
         });
-    }
+      }
+      setModalOpen(textInputModal, true);
     recordButton.classList.remove("listening");
     appFrame?.classList.remove("is-listening");
     return;
@@ -295,18 +302,127 @@ function renderStartupName() {
   }
   const name = getStartupName();
   startupNameButton.textContent = name ? name : "name your startup";
+  if (settingsStartupName) {
+    settingsStartupName.textContent = name ? name : "not set";
+  }
+}
+
+function setModalOpen(modal, isOpen) {
+  if (!modal) {
+    return;
+  }
+  modal.classList.toggle("open", isOpen);
+  modal.setAttribute("aria-hidden", String(!isOpen));
+}
+
+function closeAllModals() {
+  setModalOpen(startupNameModal, false);
+  setModalOpen(settingsModal, false);
+    setModalOpen(textInputModal, false);
+  }
+
+function wireModalClose(modal) {
+  if (!modal) {
+    return;
+  }
+  modal.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target && target.closest && target.closest("[data-modal-close]")) {
+      setModalOpen(modal, false);
+    }
+  });
+}
+
+wireModalClose(startupNameModal);
+wireModalClose(settingsModal);
+wireModalClose(textInputModal);
+
+function sendTypedToAnna(rawText) {
+  const lower = String(rawText || "").trim().toLowerCase();
+  if (!lower) {
+    return;
+  }
+
+  pushEntry("user", lower);
+  conversation = [...conversation, { role: "user", content: lower }].slice(-16);
+  const pendingId = pushPendingAnna();
+
+  fetchAnnaReply()
+    .then((reply) => {
+      const normalized = reply.toLowerCase();
+      conversation = [...conversation, { role: "assistant", content: normalized }].slice(-16);
+      resolvePendingAnna(pendingId, normalized);
+    })
+    .catch((err) => {
+      const msg = err && err.message ? String(err.message) : "anna couldn't reply";
+      resolvePendingAnna(pendingId, `anna couldn't reply: ${msg}`);
+    });
 }
 
 startupNameButton?.addEventListener("click", () => {
   const current = getStartupName();
-  const next = window.prompt("what should anna call your startup?", current || "");
-  if (!next) {
+  if (startupNameInput) {
+    startupNameInput.value = current;
+    startupNameInput.focus();
+    startupNameInput.select();
+  }
+  setMenuOpen(false);
+  closeAllModals();
+  setModalOpen(startupNameModal, true);
+});
+
+startupNameSave?.addEventListener("click", () => {
+  const value = String(startupNameInput?.value || "").trim();
+  if (!value) {
     return;
   }
-  localStorage.setItem(STORAGE_KEYS.startupName, next.trim());
+  localStorage.setItem(STORAGE_KEYS.startupName, value);
+  renderStartupName();
+  setModalOpen(startupNameModal, false);
+});
+
+settingsButton?.addEventListener("click", () => {
   renderStartupName();
   setMenuOpen(false);
+  closeAllModals();
+  setModalOpen(settingsModal, true);
 });
+
+settingsRename?.addEventListener("click", () => {
+  setModalOpen(settingsModal, false);
+  startupNameButton?.click();
+});
+
+clearTranscript?.addEventListener("click", () => {
+  transcriptEntries = [];
+  interimText = "";
+  renderTranscript();
+});
+
+clearConversation?.addEventListener("click", () => {
+  conversation = [];
+});
+
+  textInputSend?.addEventListener("click", () => {
+    const value = String(textInputField?.value || "").trim();
+    if (!value) {
+      return;
+    }
+    setModalOpen(textInputModal, false);
+    sendTypedToAnna(value);
+  });
+
+  textInputField?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    const value = String(textInputField?.value || "").trim();
+    if (!value) {
+      return;
+    }
+    setModalOpen(textInputModal, false);
+    sendTypedToAnna(value);
+  });
 
 initBrandLogoImages();
 renderStartupName();

@@ -54,7 +54,9 @@
             <strong>“hey anna, let’s build our first startup”</strong>
           </div>
 
-          <div class="transcript-stack hidden" id="transcriptStack" aria-live="polite"></div>
+          <div class="transcript-pane hidden" id="transcriptPane" aria-label="transcript">
+            <div class="transcript-list" id="transcriptList"></div>
+          </div>
         </section>
 
         <button class="record-orb" id="recordButton" aria-label="talk">
@@ -64,6 +66,93 @@
             <span class="logo-orb"></span>
           </div>
         </button>
+
+        <section class="modal" id="startupNameModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="startup name">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <h2>startup name</h2>
+                <p>what should anna call it?</p>
+              </div>
+            </div>
+
+            <label class="field">
+              <span class="field-label">name</span>
+              <input id="startupNameInput" type="text" inputmode="text" autocomplete="organization" />
+            </label>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button" data-modal-close>cancel</button>
+              <button type="button" class="glass-button primary" id="startupNameSave">save</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="settingsModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="settings">
+            <div class="modal-header">
+              <h2>settings</h2>
+              <p>quick controls for this prototype</p>
+            </div>
+
+            <div class="settings-list" role="list">
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">startup</div>
+                  <div class="settings-subtitle" id="settingsStartupName">not set</div>
+                </div>
+                <button type="button" class="glass-button" id="settingsRename">rename</button>
+              </div>
+
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">transcript</div>
+                  <div class="settings-subtitle">clears on-device only</div>
+                </div>
+                <button type="button" class="glass-button" id="clearTranscript">clear</button>
+              </div>
+
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">conversation</div>
+                  <div class="settings-subtitle">resets what anna sees next</div>
+                </div>
+                <button type="button" class="glass-button" id="clearConversation">reset</button>
+              </div>
+            </div>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button primary" data-modal-close>done</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="textInputModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="type to anna">
+            <div class="modal-header">
+              <h2>type to anna</h2>
+              <p>your browser doesn't support speech here</p>
+            </div>
+
+            <label class="field">
+              <span class="field-label">message</span>
+              <input id="textInputField" type="text" inputmode="text" autocomplete="off" />
+            </label>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button" data-modal-close>cancel</button>
+              <button type="button" class="glass-button primary" id="textInputSend">send</button>
+            </div>
+          </div>
+        </section>
       </section>
     </main>
 
