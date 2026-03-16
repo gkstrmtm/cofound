@@ -163,7 +163,6 @@ let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
 let ttsAudioEl = null;
-let ttsBrowserUtterance = null;
 let ttsFetchInFlight = 0;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
@@ -1124,7 +1123,10 @@ function ensureCurrentChatSession() {
 }
 
 function appendChatSessionEntry(role, text) {
-  const cleaned = String(text || "").trim();
+  const normalizedRole = role === "user" ? "user" : "ai";
+  const cleaned = (
+    normalizedRole === "ai" ? sanitizeAnnaReplyText(text) : String(text || "")
+  ).trim();
   if (!cleaned) {
     return;
   }
@@ -1145,7 +1147,10 @@ function appendChatSessionEntry(role, text) {
       updatedAt: Date.now(),
       page: getCurrentPageLabel(),
       title: getCurrentTaskTitle() || getStartupName() || item.title || "anna",
-      entries: nextEntries
+      entries: nextEntries.map((entry) => ({
+        ...entry,
+        text: entry.role === "ai" ? sanitizeAnnaReplyText(entry.text) : entry.text
+      }))
     };
   });
   writeChatSessions(nextSessions.slice(-60));
@@ -1187,7 +1192,7 @@ function readMemoryLog() {
 }
 
 function appendToMemory(role, content) {
-  const text = String(content || "").trim();
+  const text = (role === "user" ? String(content || "") : sanitizeAnnaReplyText(content)).trim();
   if (!text) {
     return;
   }
@@ -2076,87 +2081,28 @@ function renderVoiceSetting() {
   settingsVoice.textContent = name ? name : "auto";
 }
 
-function canUseBrowserTtsFallback() {
-  return typeof window !== "undefined" && "speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function";
-}
-
-function getPreferredBrowserTtsVoice() {
-  if (!canUseBrowserTtsFallback()) {
-    return null;
+async function readApiErrorMessage(response) {
+  if (!response) {
+    return "unknown error";
   }
-  const synth = window.speechSynthesis;
-  const voices = Array.isArray(synth.getVoices?.()) ? synth.getVoices() : [];
-  if (!voices.length) {
-    return null;
-  }
-
-  const selectedName = getSelectedVoiceName().toLowerCase();
-  if (selectedName) {
-    const exact = voices.find((voice) => String(voice?.name || "").trim().toLowerCase() === selectedName);
-    if (exact) {
-      return exact;
-    }
-    const partial = voices.find((voice) => String(voice?.name || "").trim().toLowerCase().includes(selectedName));
-    if (partial) {
-      return partial;
-    }
-  }
-
-  return (
-    voices.find((voice) => /^en(-|_)/i.test(String(voice?.lang || ""))) ||
-    voices.find((voice) => /english/i.test(String(voice?.name || ""))) ||
-    voices[0] ||
-    null
-  );
-}
-
-function playBrowserTts(text, sessionId) {
-  const cleaned = String(text || "").trim();
-  if (!cleaned || !canUseBrowserTtsFallback()) {
-    return false;
-  }
-
-  const synth = window.speechSynthesis;
-  const utterance = new window.SpeechSynthesisUtterance(cleaned);
-  const voice = getPreferredBrowserTtsVoice();
-  if (voice) {
-    utterance.voice = voice;
-    utterance.lang = voice.lang || "en-US";
-  } else {
-    utterance.lang = "en-US";
-  }
-  utterance.volume = getOutputVolume();
-  utterance.rate = 1;
-  utterance.pitch = 1;
-
-  ttsIsPlaying = true;
-  ttsBrowserUtterance = utterance;
-  ttsCurrentAudio = null;
-  ttsCurrentUrl = null;
-
-  const finish = () => {
-    if (ttsBrowserUtterance !== utterance) {
-      return;
-    }
-    ttsBrowserUtterance = null;
-    ttsIsPlaying = false;
-    clearAudioNotice();
-    playNextTts();
-    maybeResumeListeningAfterReply();
-  };
-
-  utterance.onend = finish;
-  utterance.onerror = finish;
-
   try {
-    synth.cancel();
-    synth.speak(utterance);
-    return true;
+    const data = await response.json();
+    const detail = data?.detail || data?.error || data?.message;
+    if (detail) {
+      return String(detail).trim();
+    }
   } catch {
-    ttsBrowserUtterance = null;
-    ttsIsPlaying = false;
-    return false;
+    // ignore
   }
+  try {
+    const text = await response.text();
+    if (text) {
+      return String(text).trim();
+    }
+  } catch {
+    // ignore
+  }
+  return `http ${response.status}`;
 }
 
 function stopAllTts() {
@@ -2177,15 +2123,6 @@ function stopAllTts() {
     }
   }
   ttsCurrentAudio = null;
-
-  if (ttsBrowserUtterance && canUseBrowserTtsFallback()) {
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // ignore
-    }
-  }
-  ttsBrowserUtterance = null;
 
   if (ttsCurrentUrl) {
     try {
@@ -2208,7 +2145,7 @@ function playNextTts() {
   if (!next) {
     return;
   }
-  const { url, text, sessionId, mode } = next;
+  const { url, sessionId } = next;
   if (sessionId !== ttsSessionId) {
     if (url) {
       try {
@@ -2218,14 +2155,6 @@ function playNextTts() {
       }
     }
     return playNextTts();
-  }
-
-  if (mode === "browser") {
-    if (!playBrowserTts(text, sessionId)) {
-      setAudioNotice("voice playback failed on this device.");
-      return playNextTts();
-    }
-    return;
   }
 
   ttsIsPlaying = true;
@@ -2256,6 +2185,7 @@ function playNextTts() {
   audio.onerror = () => {
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
+    setAudioNotice("anna couldn't play that voice reply. try again in a second.");
     if (ttsCurrentUrl) {
       try {
         URL.revokeObjectURL(ttsCurrentUrl);
@@ -2310,27 +2240,34 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       }
 
       const voiceId = String(voiceIdOverride || getSelectedVoiceId() || "").trim();
+      clearAudioNotice();
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
       });
       if (!res.ok) {
-        ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
-        playNextTts();
+        const detail = await readApiErrorMessage(res);
+        console.error("anna elevenlabs tts failed:", detail);
+        setAudioNotice("voice reply failed. elevenlabs didn't return audio.");
         return;
       }
       const blob = await res.blob();
       if (mySession !== ttsSessionId) {
         return;
       }
+      if (!blob.size) {
+        console.error("anna elevenlabs tts failed: empty audio response");
+        setAudioNotice("voice reply failed. elevenlabs returned empty audio.");
+        return;
+      }
       const url = URL.createObjectURL(blob);
       ttsQueue.push({ url, sessionId: mySession });
       playNextTts();
     })
-    .catch(() => {
-      ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
-      playNextTts();
+    .catch((err) => {
+      console.error("anna elevenlabs tts failed:", err);
+      setAudioNotice("voice reply failed. elevenlabs isn't reachable right now.");
     })
     .finally(() => {
       ttsFetchInFlight = Math.max(0, ttsFetchInFlight - 1);
@@ -2475,9 +2412,10 @@ function resolvePendingAnna(pendingId, text) {
 
 function sanitizeAnnaReplyText(text) {
   return String(text || "")
+    .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, ", ")
     .replace(
-      /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just |all )?text(?:[- ]based|[- ]only)?(?: here)?|i (?:can't|cannot) speak(?: out loud)?|i don't have a voice here|no voice here|you(?:'ll| will) need (?:a )?different setup for voice|voice (?:isn't|is not|isn’t) available here|i can only respond in text(?: here)?|unable to use voice here|can't do voice here)(?:[^.!?]*[.!?])?/gi,
+      /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just |all )?text(?:[- ]based|[- ]only)?(?: here)?|i (?:can't|cannot) speak(?: out loud)?|i do not have a voice here|i don't have a voice here|no voice here|you(?:'ll| will) need (?:a )?different setup for voice|voice (?:isn't|is not|isn’t) available here|i can only respond in text(?: here)?|unable to use voice here|can't do voice here)(?:[^.!?]*[.!?])?/gi,
       " "
     )
     .replace(/\s+,/g, ",")
