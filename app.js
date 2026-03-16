@@ -137,6 +137,8 @@ let isListeningNow = false;
 let persistentListeningEnabled = false;
 let pendingResumeListening = false;
 let lastToggleAt = 0;
+let pendingSpeechCommitTimer = null;
+let finalSpeechBuffer = "";
 let typeComposerAllowBlur = false;
 let supabaseClient = null;
 let supabaseConfigured = false;
@@ -163,6 +165,121 @@ function updateListeningUi() {
   const isActive = persistentListeningEnabled || isListeningNow;
   recordButton?.classList.toggle("listening", isActive);
   appFrame?.classList.toggle("is-listening", isActive);
+}
+
+function clearPendingSpeechCommit() {
+  if (pendingSpeechCommitTimer) {
+    window.clearTimeout(pendingSpeechCommitTimer);
+    pendingSpeechCommitTimer = null;
+  }
+}
+
+function clearBufferedSpeech() {
+  clearPendingSpeechCommit();
+  finalSpeechBuffer = "";
+  interimText = "";
+  setInterim("");
+}
+
+function getSpeechCommitDelay(text, hasInterim = false) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) {
+    return 1400;
+  }
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  const lastWord = words[words.length - 1] || "";
+  const soundsIncomplete = /^(and|but|or|so|because|if|then|to|for|with|about|of|the|a|an|my|your|our)$/i.test(lastWord);
+  const endsDecisively = /[.!?]$/.test(normalized);
+
+  let delay = 1200;
+  if (words.length <= 3) {
+    delay = 2100;
+  } else if (words.length <= 7) {
+    delay = 1700;
+  } else if (words.length <= 14) {
+    delay = 1350;
+  }
+
+  if (soundsIncomplete) {
+    delay += 450;
+  }
+  if (hasInterim) {
+    delay += 400;
+  }
+  if (endsDecisively) {
+    delay -= 250;
+  }
+
+  return Math.max(900, delay);
+}
+
+function normalizeBufferedSpeechParts(parts) {
+  return parts
+    .map((part) => String(part || "").trim().toLowerCase())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function submitRecognizedUserText(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) {
+    return;
+  }
+
+  clearBufferedSpeech();
+  ensureStartedUi();
+  if (!ensureSignedIn()) {
+    persistentListeningEnabled = false;
+    setListening(false);
+    return;
+  }
+
+  pushEntry("user", normalized);
+  appendToMemory("user", normalized);
+
+  pauseListeningForReply();
+
+  conversation = [...conversation, { role: "user", content: normalized }].slice(-16);
+  const pendingId = pushPendingAnna();
+
+  startStreamingAnnaReply(pendingId)
+    .then((reply) => {
+      const rawReply = String(reply || "").trim();
+      const answer = rawReply.toLowerCase();
+      conversation = [...conversation, { role: "assistant", content: answer }].slice(-16);
+      appendToMemory("assistant", answer);
+    })
+    .catch((err) => {
+      const msg = err && err.message ? String(err.message) : "anna couldn't reply";
+      resolvePendingAnna(pendingId, `anna couldn't reply: ${msg}`);
+    })
+    .finally(() => {
+      maybeResumeListeningAfterReply();
+    });
+}
+
+function scheduleBufferedSpeechCommit() {
+  const buffered = normalizeBufferedSpeechParts([finalSpeechBuffer]);
+  if (!buffered || pendingResumeListening) {
+    return;
+  }
+
+  clearPendingSpeechCommit();
+  const delay = getSpeechCommitDelay(buffered, Boolean(interimText));
+  pendingSpeechCommitTimer = window.setTimeout(() => {
+    pendingSpeechCommitTimer = null;
+    if (pendingResumeListening || !persistentListeningEnabled || !finalSpeechBuffer.trim()) {
+      return;
+    }
+    if (interimText.trim()) {
+      scheduleBufferedSpeechCommit();
+      return;
+    }
+    submitRecognizedUserText(finalSpeechBuffer);
+  }, delay);
 }
 
 function stopSpeechRecognizer() {
@@ -204,6 +321,7 @@ function pauseListeningForReply() {
     setListening(false);
     return;
   }
+  clearPendingSpeechCommit();
   pendingResumeListening = true;
   isListeningNow = false;
   interimText = "";
@@ -2294,6 +2412,7 @@ function ensureSpeechRecognizer() {
 
   recognizer.onresult = (event) => {
     let nextInterim = "";
+    const finalizedParts = [];
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const result = event.results[i];
       const text = String(result[0]?.transcript || "").trim().toLowerCase();
@@ -2302,42 +2421,23 @@ function ensureSpeechRecognizer() {
       }
 
       if (result.isFinal) {
-        setInterim("");
-        ensureStartedUi();
-        if (!ensureSignedIn()) {
-          persistentListeningEnabled = false;
-          setListening(false);
-          return;
-        }
-
-        pushEntry("user", text);
-        appendToMemory("user", text);
-
-        pauseListeningForReply();
-
-        conversation = [...conversation, { role: "user", content: text }].slice(-16);
-        const pendingId = pushPendingAnna();
-
-        startStreamingAnnaReply(pendingId)
-          .then((reply) => {
-            const rawReply = String(reply || "").trim();
-            const normalized = rawReply.toLowerCase();
-            conversation = [...conversation, { role: "assistant", content: normalized }].slice(-16);
-            appendToMemory("assistant", normalized);
-          })
-          .catch((err) => {
-            const msg = err && err.message ? String(err.message) : "anna couldn't reply";
-            resolvePendingAnna(pendingId, `anna couldn't reply: ${msg}`);
-          })
-          .finally(() => {
-            maybeResumeListeningAfterReply();
-          });
+        finalizedParts.push(text);
       } else {
         nextInterim = text;
       }
     }
 
+    if (finalizedParts.length) {
+      finalSpeechBuffer = normalizeBufferedSpeechParts([finalSpeechBuffer, ...finalizedParts]);
+      nextInterim = "";
+    }
+
+    interimText = nextInterim;
     setInterim(nextInterim);
+
+    if (finalSpeechBuffer) {
+      scheduleBufferedSpeechCommit();
+    }
   };
 
   recognizer.onerror = () => {
@@ -2351,6 +2451,9 @@ function ensureSpeechRecognizer() {
       if (pendingResumeListening) {
         maybeResumeListeningAfterReply();
       } else {
+        if (finalSpeechBuffer.trim() && !pendingSpeechCommitTimer) {
+          scheduleBufferedSpeechCommit();
+        }
         resumePersistentListeningSoon(180);
       }
       return;
@@ -2369,6 +2472,8 @@ function setListening(isListening) {
   isListeningNow = isListening;
   if (isListening) {
     pendingResumeListening = false;
+  } else {
+    clearBufferedSpeech();
   }
   if (isListening) {
     try {
@@ -2666,7 +2771,9 @@ function randomizeTryPrompt() {
 }
 
 function toggleListeningFromTap(event) {
-  event?.preventDefault?.();
+  if (event?.type === "pointerup") {
+    event.preventDefault?.();
+  }
   unlockAudioFromGesture();
   const now = Date.now();
   if (now - lastToggleAt < 260) {
@@ -2685,9 +2792,8 @@ function toggleListeningFromTap(event) {
 if (recordButton) {
   if ("PointerEvent" in window) {
     recordButton.addEventListener("pointerup", toggleListeningFromTap);
-  } else {
-    recordButton.addEventListener("click", toggleListeningFromTap);
   }
+  recordButton.addEventListener("click", toggleListeningFromTap);
 }
 
 function setMenuOpen(isOpen) {
