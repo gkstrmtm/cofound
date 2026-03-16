@@ -1,5 +1,5 @@
 :root {
-  --bg: #b7b7b7;
+  --bg: #f4f2ea;
   --bg-card: rgba(255, 255, 255, 0.82);
   --olive: #355f00;
   --olive-deep: #274800;
@@ -25,7 +25,7 @@ body {
   margin: 0;
   height: 100%;
   font-family: "DM Sans", sans-serif;
-  background: var(--bg);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 244, 236, 0.96));
   color: var(--ink);
 }
 
@@ -46,7 +46,7 @@ button {
   cursor: pointer;
 }
 
-.prototype-layout {
+.app-shell {
   position: relative;
   height: 100dvh;
   display: grid;
@@ -59,7 +59,7 @@ button {
   height: min(92dvh, 860px);
   min-height: 0;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 244, 236, 0.96));
-  border: 1px solid rgba(83, 124, 20, 0.16);
+  border: 0;
   border-radius: 42px;
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -549,7 +549,7 @@ vercel-live-feedback,
     padding: 0.9rem 0.85rem 0;
   }
 
-  .prototype-layout {
+  .app-shell {
     padding: 0;
   }
 
