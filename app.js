@@ -163,6 +163,7 @@ let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
 let ttsAudioEl = null;
+let ttsBrowserUtterance = null;
 let ttsFetchInFlight = 0;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
@@ -2075,6 +2076,89 @@ function renderVoiceSetting() {
   settingsVoice.textContent = name ? name : "auto";
 }
 
+function canUseBrowserTtsFallback() {
+  return typeof window !== "undefined" && "speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function";
+}
+
+function getPreferredBrowserTtsVoice() {
+  if (!canUseBrowserTtsFallback()) {
+    return null;
+  }
+  const synth = window.speechSynthesis;
+  const voices = Array.isArray(synth.getVoices?.()) ? synth.getVoices() : [];
+  if (!voices.length) {
+    return null;
+  }
+
+  const selectedName = getSelectedVoiceName().toLowerCase();
+  if (selectedName) {
+    const exact = voices.find((voice) => String(voice?.name || "").trim().toLowerCase() === selectedName);
+    if (exact) {
+      return exact;
+    }
+    const partial = voices.find((voice) => String(voice?.name || "").trim().toLowerCase().includes(selectedName));
+    if (partial) {
+      return partial;
+    }
+  }
+
+  return (
+    voices.find((voice) => /^en(-|_)/i.test(String(voice?.lang || ""))) ||
+    voices.find((voice) => /english/i.test(String(voice?.name || ""))) ||
+    voices[0] ||
+    null
+  );
+}
+
+function playBrowserTts(text, sessionId) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned || !canUseBrowserTtsFallback()) {
+    return false;
+  }
+
+  const synth = window.speechSynthesis;
+  const utterance = new window.SpeechSynthesisUtterance(cleaned);
+  const voice = getPreferredBrowserTtsVoice();
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang || "en-US";
+  } else {
+    utterance.lang = "en-US";
+  }
+  utterance.volume = getOutputVolume();
+  utterance.rate = 1;
+  utterance.pitch = 1;
+
+  ttsIsPlaying = true;
+  ttsBrowserUtterance = utterance;
+  ttsCurrentAudio = null;
+  ttsCurrentUrl = null;
+
+  const finish = () => {
+    if (ttsBrowserUtterance !== utterance) {
+      return;
+    }
+    ttsBrowserUtterance = null;
+    ttsIsPlaying = false;
+    clearAudioNotice();
+    playNextTts();
+    maybeResumeListeningAfterReply();
+  };
+
+  utterance.onend = finish;
+  utterance.onerror = finish;
+
+  try {
+    synth.cancel();
+    synth.speak(utterance);
+    return true;
+  } catch {
+    ttsBrowserUtterance = null;
+    ttsIsPlaying = false;
+    return false;
+  }
+}
+
 function stopAllTts() {
   ttsSessionId += 1;
   ttsQueue = [];
@@ -2093,6 +2177,15 @@ function stopAllTts() {
     }
   }
   ttsCurrentAudio = null;
+
+  if (ttsBrowserUtterance && canUseBrowserTtsFallback()) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  ttsBrowserUtterance = null;
 
   if (ttsCurrentUrl) {
     try {
@@ -2115,7 +2208,7 @@ function playNextTts() {
   if (!next) {
     return;
   }
-  const { url, sessionId } = next;
+  const { url, text, sessionId, mode } = next;
   if (sessionId !== ttsSessionId) {
     if (url) {
       try {
@@ -2125,6 +2218,14 @@ function playNextTts() {
       }
     }
     return playNextTts();
+  }
+
+  if (mode === "browser") {
+    if (!playBrowserTts(text, sessionId)) {
+      setAudioNotice("voice playback failed on this device.");
+      return playNextTts();
+    }
+    return;
   }
 
   ttsIsPlaying = true;
@@ -2215,6 +2316,8 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
         body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
       });
       if (!res.ok) {
+        ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
+        playNextTts();
         return;
       }
       const blob = await res.blob();
@@ -2226,7 +2329,8 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       playNextTts();
     })
     .catch(() => {
-      // ignore; ElevenLabs should be the single voice path
+      ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
+      playNextTts();
     })
     .finally(() => {
       ttsFetchInFlight = Math.max(0, ttsFetchInFlight - 1);
