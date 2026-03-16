@@ -67,6 +67,38 @@
           <div class="startup-tasks" id="startupTasks" role="list" aria-label="tasks"></div>
         </section>
 
+        <section class="modal" id="authModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="sign in">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <h2>sign in</h2>
+                <p>so anna can remember across days</p>
+              </div>
+            </div>
+
+            <label class="field">
+              <span class="field-label">name (optional)</span>
+              <input id="authNameInput" type="text" inputmode="text" autocomplete="name" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">email</span>
+              <input id="authEmailInput" type="email" inputmode="email" autocomplete="email" />
+            </label>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button" data-modal-close>not now</button>
+              <button type="button" class="glass-button primary" id="authContinue">continue</button>
+            </div>
+          </div>
+        </section>
+
         <section class="modal" id="settingsModal" aria-hidden="true">
           <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
           <div class="modal-panel" role="dialog" aria-label="settings">

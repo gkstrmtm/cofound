@@ -30,6 +30,7 @@ const volumePanel = document.getElementById("volumePanel");
 const volumeSlider = document.getElementById("volumeSlider");
 const volumeThumb = document.getElementById("volumeThumb");
 const volumeFill = document.getElementById("volumeFill");
+const volumeScrim = document.getElementById("volumeScrim");
 
 const menuButton = document.getElementById("menuButton");
 const menuDrawer = document.getElementById("menuDrawer");
@@ -66,6 +67,11 @@ const textInputModal = document.getElementById("textInputModal");
 const textInputField = document.getElementById("textInputField");
 const textInputSend = document.getElementById("textInputSend");
 
+const authModal = document.getElementById("authModal");
+const authNameInput = document.getElementById("authNameInput");
+const authEmailInput = document.getElementById("authEmailInput");
+const authContinue = document.getElementById("authContinue");
+
 const STORAGE_KEYS = {
   startupName: "anna:startupName",
   userName: "anna:userName",
@@ -76,7 +82,9 @@ const STORAGE_KEYS = {
   elevenVoiceId: "anna:elevenVoiceId",
   elevenVoiceName: "anna:elevenVoiceName",
   outputVolume: "anna:outputVolume",
-  outputMuted: "anna:outputMuted"
+  outputMuted: "anna:outputMuted",
+  authUser: "anna:authUser",
+  memoryLog: "anna:memoryLog"
 };
 
 let transcriptEntries = [];
@@ -103,6 +111,141 @@ let audioCtx = null;
 let ttsFetchChain = Promise.resolve();
 
 let isAdjustingVolume = false;
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore
+  }
+}
+
+function getAuthUser() {
+  const user = readJson(STORAGE_KEYS.authUser, null);
+  if (!user || typeof user !== "object") {
+    return null;
+  }
+  const email = String(user.email || "").trim();
+  if (!email) {
+    return null;
+  }
+  return {
+    name: String(user.name || "").trim(),
+    email,
+    createdAt: Number(user.createdAt || 0) || 0
+  };
+}
+
+function setAuthUser(user) {
+  const name = String(user?.name || "").trim();
+  const email = String(user?.email || "").trim().toLowerCase();
+  if (!email) {
+    return;
+  }
+  writeJson(STORAGE_KEYS.authUser, { name, email, createdAt: Date.now() });
+}
+
+function ensureSignedIn() {
+  if (!authModal) {
+    return true;
+  }
+  const user = getAuthUser();
+  if (user) {
+    return true;
+  }
+  closeAllModals();
+  setModalOpen(authModal, true);
+  requestAnimationFrame(() => {
+    authEmailInput?.focus?.();
+  });
+  return false;
+}
+
+function readMemoryLog() {
+  const log = readJson(STORAGE_KEYS.memoryLog, []);
+  return Array.isArray(log) ? log : [];
+}
+
+function appendToMemory(role, content) {
+  const text = String(content || "").trim();
+  if (!text) {
+    return;
+  }
+  const user = getAuthUser();
+  const userId = user ? user.email : "anonymous";
+  const log = readMemoryLog();
+  const entry = {
+    role,
+    content: text,
+    ts: Date.now(),
+    userId
+  };
+  const next = [...log, entry].slice(-600);
+  writeJson(STORAGE_KEYS.memoryLog, next);
+}
+
+function formatRelativeTime(msAgo) {
+  const sec = Math.max(0, Math.round(msAgo / 1000));
+  if (sec < 90) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 90) return `${min} minutes ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 36) return `${hr} hours ago`;
+  const day = Math.round(hr / 24);
+  if (day < 10) return `${day} days ago`;
+  const wk = Math.round(day / 7);
+  return `${wk} weeks ago`;
+}
+
+function buildMessagesForApi() {
+  const nowIso = new Date().toISOString();
+  const user = getAuthUser();
+  const log = readMemoryLog();
+  const currentUserId = user ? user.email : "anonymous";
+
+  const now = Date.now();
+  const older = [];
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const e = log[i];
+    if (!e || !e.ts || !e.content) continue;
+    if (String(e.userId || "") !== currentUserId) continue;
+    // skip very recent items; they are in conversation already
+    if (now - Number(e.ts) < 10 * 60 * 1000) continue;
+    older.push(e);
+    if (older.length >= 8) break;
+  }
+
+  const memoryLines = older
+    .reverse()
+    .map((e) => {
+      const when = formatRelativeTime(now - Number(e.ts));
+      const who = e.role === "user" ? "user" : "anna";
+      const snippet = String(e.content).slice(0, 180);
+      return `- ${when}: ${who} said "${snippet}"`;
+    })
+    .join("\n");
+
+  const sysParts = [`current time: ${nowIso}`];
+  if (user?.email) {
+    sysParts.push(`signed in as: ${user.email}`);
+  }
+  if (memoryLines) {
+    sysParts.push("memory (older context):\n" + memoryLines);
+  }
+  sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
+
+  return [{ role: "system", content: sysParts.join("\n\n") }, ...conversation];
+}
 
 function ensureStartedUi() {
   if (!appFrame || !transcriptPane) {
@@ -192,8 +335,25 @@ function getStoredVolume() {
   return clamp01(raw);
 }
 
+function getMuted() {
+  return (localStorage.getItem(STORAGE_KEYS.outputMuted) || "false") === "true";
+}
+
 function getOutputVolume() {
-  return getStoredVolume();
+  return getMuted() ? 0 : getStoredVolume();
+}
+
+function setMuted(isMuted) {
+  localStorage.setItem(STORAGE_KEYS.outputMuted, isMuted ? "true" : "false");
+  renderVolumeUi();
+
+  if (ttsCurrentAudio) {
+    try {
+      ttsCurrentAudio.volume = getOutputVolume();
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function setStoredVolume(next) {
@@ -214,6 +374,11 @@ function setVolumePanelOpen(isOpen) {
   }
   volumePanel.classList.toggle("open", isOpen);
   volumePanel.setAttribute("aria-hidden", String(!isOpen));
+
+  if (volumeScrim) {
+    volumeScrim.classList.toggle("open", isOpen);
+    volumeScrim.setAttribute("aria-hidden", String(!isOpen));
+  }
 }
 
 function renderVolumeUi() {
@@ -233,6 +398,10 @@ function renderVolumeUi() {
 
   if (volumeFill) {
     volumeFill.style.height = `${Math.max(0, Math.min(100, vol100))}%`;
+  }
+
+  if (volumeButton) {
+    volumeButton.classList.toggle("is-muted", getMuted());
   }
 }
 
@@ -357,6 +526,48 @@ function setSelectedVoice(voiceId, voiceName) {
   renderVoiceSetting();
 }
 
+let defaultVoiceSelectionPromise = null;
+
+async function ensureDefaultVoiceSelection() {
+  // If the user never picked a voice, choose Bella if available.
+  if (getSelectedVoiceId()) {
+    return;
+  }
+  if (defaultVoiceSelectionPromise) {
+    return defaultVoiceSelectionPromise;
+  }
+
+  defaultVoiceSelectionPromise = (async () => {
+  try {
+    const res = await fetch("/api/voices", { method: "GET" });
+    if (!res.ok) {
+      return;
+    }
+    const data = await res.json();
+    const allVoices = Array.isArray(data?.voices) ? data.voices : [];
+    const females = allVoices.filter((v) => String(v?.gender || "").toLowerCase() === "female");
+    if (!females.length) {
+      return;
+    }
+    const bella = females.find((v) => String(v?.name || "").trim().toLowerCase() === "bella");
+    const chosen = bella || females[0];
+    const id = String(chosen?.voice_id || "").trim();
+    const name = String(chosen?.name || "").trim() || "bella";
+    if (id) {
+      setSelectedVoice(id, name);
+    }
+  } catch {
+    // ignore
+  }
+  })();
+
+  try {
+    await defaultVoiceSelectionPromise;
+  } finally {
+    defaultVoiceSelectionPromise = null;
+  }
+}
+
 function renderVoiceSetting() {
   if (!settingsVoice) {
     return;
@@ -472,7 +683,6 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
   }
 
   const mySession = ttsSessionId;
-  const voiceId = String(voiceIdOverride || getSelectedVoiceId() || "").trim();
 
   // Serialize fetches so audio enqueues in the same order as text segments.
   ttsFetchChain = ttsFetchChain
@@ -480,6 +690,12 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       if (mySession !== ttsSessionId) {
         return;
       }
+
+      if (!voiceIdOverride && !getSelectedVoiceId()) {
+        await ensureDefaultVoiceSelection();
+      }
+
+      const voiceId = String(voiceIdOverride || getSelectedVoiceId() || "").trim();
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -643,7 +859,7 @@ async function fetchAnnaReply() {
       headers: {
         "content-type": "application/json"
       },
-      body: JSON.stringify({ messages: conversation }),
+      body: JSON.stringify({ messages: buildMessagesForApi() }),
       signal: controller.signal
     });
   } finally {
@@ -687,7 +903,7 @@ async function fetchAnnaReplyStream(onDelta) {
       headers: {
         "content-type": "application/json"
       },
-      body: JSON.stringify({ messages: conversation }),
+      body: JSON.stringify({ messages: buildMessagesForApi() }),
       signal: controller.signal
     });
   } finally {
@@ -953,7 +1169,14 @@ function ensureSpeechRecognizer() {
 
       if (result.isFinal) {
         setInterim("");
+        ensureStartedUi();
+        if (!ensureSignedIn()) {
+          setListening(false);
+          return;
+        }
+
         pushEntry("user", text);
+        appendToMemory("user", text);
 
         // stop listening once the user has finished a thought,
         // so anna's spoken reply doesn't get blocked and doesn't echo back into the mic.
@@ -964,8 +1187,10 @@ function ensureSpeechRecognizer() {
 
         startStreamingAnnaReply(pendingId)
           .then((reply) => {
-            const normalized = String(reply || "").trim().toLowerCase();
+            const rawReply = String(reply || "").trim();
+            const normalized = rawReply.toLowerCase();
             conversation = [...conversation, { role: "assistant", content: normalized }].slice(-16);
+            appendToMemory("assistant", normalized);
           })
           .catch((err) => {
             const msg = err && err.message ? String(err.message) : "anna couldn't reply";
@@ -1100,17 +1325,79 @@ typeComposerInput?.addEventListener("keydown", (event) => {
   sendTypedToAnna(value);
 });
 
-// volume: open/close should feel stable (no instant close)
+let volumeHoldTimer = null;
+let volumeHoldFired = false;
+const VOLUME_HOLD_MS = 260;
+
+function clearVolumeHold() {
+  if (volumeHoldTimer) {
+    window.clearTimeout(volumeHoldTimer);
+    volumeHoldTimer = null;
+  }
+}
+
+function toggleMuteFromTap() {
+  unlockAudioFromGesture();
+  setMuted(!getMuted());
+}
+
+function openVolumePanel() {
+  unlockAudioFromGesture();
+  setVolumePanelOpen(true);
+  renderVolumeUi();
+}
+
+function closeVolumePanel() {
+  setVolumePanelOpen(false);
+}
+
+// volume button:
+// - quick tap: mute/unmute
+// - press and hold: open slider
+// - when open: tap closes
 volumeButton?.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   e.stopPropagation();
-  unlockAudioFromGesture();
-  const isOpen = volumePanel?.classList.contains("open");
-  setVolumePanelOpen(!isOpen);
+
+  volumeHoldFired = false;
+  clearVolumeHold();
+
+  // if the slider is already open, don't start the hold-to-open timer.
+  // (tap-to-mute should still work while open)
+  if (volumePanel?.classList.contains("open")) {
+    return;
+  }
+
+  volumeHoldTimer = window.setTimeout(() => {
+    volumeHoldFired = true;
+    openVolumePanel();
+  }, VOLUME_HOLD_MS);
+});
+
+volumeButton?.addEventListener("pointerup", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  clearVolumeHold();
+  if (volumeHoldFired) {
+    return;
+  }
+  toggleMuteFromTap();
+});
+
+volumeButton?.addEventListener("pointercancel", () => {
+  clearVolumeHold();
 });
 
 volumePanel?.addEventListener("pointerdown", (e) => {
   e.stopPropagation();
+});
+
+volumeScrim?.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (isAdjustingVolume) {
+    return;
+  }
+  closeVolumePanel();
 });
 
 function beginAdjustingVolume(e) {
@@ -1119,6 +1406,14 @@ function beginAdjustingVolume(e) {
   }
   unlockAudioFromGesture();
   isAdjustingVolume = true;
+
+  if (e && e.pointerId != null && volumePanel.setPointerCapture) {
+    try {
+      volumePanel.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  }
   try {
     e.preventDefault?.();
   } catch {
@@ -1148,20 +1443,29 @@ function moveAdjustingVolume(e) {
   }
 }
 
-function endAdjustingVolume() {
+function endAdjustingVolume(e) {
   if (!isAdjustingVolume) {
     return;
   }
   isAdjustingVolume = false;
+
+  if (e && e.pointerId != null && volumePanel?.releasePointerCapture) {
+    try {
+      volumePanel.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  }
 }
 
-volumeSlider?.addEventListener("pointerdown", beginAdjustingVolume);
-volumeSlider?.addEventListener("pointermove", moveAdjustingVolume);
-volumeSlider?.addEventListener("pointerup", endAdjustingVolume);
-volumeSlider?.addEventListener("pointercancel", endAdjustingVolume);
-volumeSlider?.addEventListener("touchstart", beginAdjustingVolume, { passive: false });
-volumeSlider?.addEventListener("touchmove", moveAdjustingVolume, { passive: false });
-volumeSlider?.addEventListener("touchend", endAdjustingVolume);
+// big hitbox: dragging anywhere inside the popup adjusts volume
+volumePanel?.addEventListener("pointerdown", beginAdjustingVolume);
+volumePanel?.addEventListener("pointermove", moveAdjustingVolume);
+volumePanel?.addEventListener("pointerup", endAdjustingVolume);
+volumePanel?.addEventListener("pointercancel", endAdjustingVolume);
+volumePanel?.addEventListener("touchstart", beginAdjustingVolume, { passive: false });
+volumePanel?.addEventListener("touchmove", moveAdjustingVolume, { passive: false });
+volumePanel?.addEventListener("touchend", endAdjustingVolume);
 
 volumeSlider?.addEventListener("keydown", (event) => {
   const step = event.shiftKey ? 0.1 : 0.04;
@@ -1193,22 +1497,7 @@ document.addEventListener("pointerdown", (event) => {
     }
   }
 
-  if (!volumePanel || !volumePanel.classList.contains("open")) {
-    return;
-  }
-  const target = event.target;
-  const path = event.composedPath ? event.composedPath() : null;
-  const isInsideVolume =
-    (path && (path.includes(volumeWrap) || path.includes(volumeButton) || path.includes(volumePanel))) ||
-    (!!target &&
-      ((volumeWrap && volumeWrap.contains && volumeWrap.contains(target)) ||
-        (volumePanel && volumePanel.contains && volumePanel.contains(target)) ||
-        (volumeButton && volumeButton.contains && volumeButton.contains(target))));
-
-  if (isInsideVolume) {
-    return;
-  }
-  setVolumePanelOpen(false);
+  // volume panel closes via scrim only
 });
 
 if (window.visualViewport) {
@@ -1397,11 +1686,12 @@ function setModalOpen(modal, isOpen) {
 function closeAllModals() {
   setModalOpen(startupNameModal, false);
   setModalOpen(settingsModal, false);
-    setModalOpen(textInputModal, false);
+  setModalOpen(textInputModal, false);
   setModalOpen(accountModal, false);
+  setModalOpen(authModal, false);
   setModalOpen(voiceModal, false);
   setTypeComposerOpen(false);
-  }
+}
 
 function wireModalClose(modal) {
   if (!modal) {
@@ -1419,7 +1709,55 @@ wireModalClose(startupNameModal);
 wireModalClose(settingsModal);
 wireModalClose(textInputModal);
 wireModalClose(accountModal);
+wireModalClose(authModal);
 wireModalClose(voiceModal);
+
+function syncAuthIntoProfileFields() {
+  const user = getAuthUser();
+  if (!user) {
+    return;
+  }
+  if (user.email && !getAccountValue(STORAGE_KEYS.userEmail)) {
+    localStorage.setItem(STORAGE_KEYS.userEmail, user.email);
+  }
+  if (user.name && !getAccountValue(STORAGE_KEYS.userName)) {
+    localStorage.setItem(STORAGE_KEYS.userName, user.name);
+  }
+}
+
+function submitAuthFromModal() {
+  const name = String(authNameInput?.value || "").trim();
+  const email = String(authEmailInput?.value || "").trim();
+  if (!email) {
+    authEmailInput?.focus?.();
+    return;
+  }
+  setAuthUser({ name, email });
+  syncAuthIntoProfileFields();
+  renderStartupName();
+  setModalOpen(authModal, false);
+}
+
+authContinue?.addEventListener("click", (e) => {
+  e.preventDefault();
+  submitAuthFromModal();
+});
+
+authEmailInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  submitAuthFromModal();
+});
+
+authNameInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  submitAuthFromModal();
+});
 
 function openAccountModal(focusField) {
   if (accountName) accountName.value = getAccountValue(STORAGE_KEYS.userName);
@@ -1449,15 +1787,21 @@ function sendTypedToAnna(rawText) {
   }
 
   ensureStartedUi();
+  if (!ensureSignedIn()) {
+    return;
+  }
 
   pushEntry("user", lower);
+  appendToMemory("user", lower);
   conversation = [...conversation, { role: "user", content: lower }].slice(-16);
   const pendingId = pushPendingAnna();
 
   startStreamingAnnaReply(pendingId)
     .then((reply) => {
-      const normalized = String(reply || "").trim().toLowerCase();
+      const rawReply = String(reply || "").trim();
+      const normalized = rawReply.toLowerCase();
       conversation = [...conversation, { role: "assistant", content: normalized }].slice(-16);
+      appendToMemory("assistant", normalized);
     })
     .catch((err) => {
       const msg = err && err.message ? String(err.message) : "anna couldn't reply";
@@ -1512,6 +1856,10 @@ accountSave?.addEventListener("click", () => {
   localStorage.setItem(STORAGE_KEYS.paymentMethod, nextPayment);
   localStorage.setItem(STORAGE_KEYS.subscription, nextSub || "starter");
 
+  if (nextEmail) {
+    setAuthUser({ name: nextName, email: nextEmail });
+  }
+
   renderStartupName();
   setModalOpen(accountModal, false);
   setModalOpen(settingsModal, true);
@@ -1539,9 +1887,11 @@ accountSave?.addEventListener("click", () => {
   });
 
 initBrandLogoImages();
+syncAuthIntoProfileFields();
 renderStartupName();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();
 randomizeTryPrompt();
 loadStartupBenchmarks();
+ensureDefaultVoiceSelection();
