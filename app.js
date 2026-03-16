@@ -75,7 +75,15 @@ function pushEntry(role, text) {
 
 function pushPendingAnna() {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  transcriptEntries = [{ role: "ai", text: "…", pendingId: id }, ...transcriptEntries].slice(0, 8);
+  const pending = { role: "ai", text: "…", pendingId: id };
+  const next = transcriptEntries.slice();
+  const insertAfterIndex = next.findIndex((entry) => entry.role === "user");
+  if (insertAfterIndex === -1) {
+    next.unshift(pending);
+  } else {
+    next.splice(insertAfterIndex + 1, 0, pending);
+  }
+  transcriptEntries = next.slice(0, 8);
   renderTranscript();
   return id;
 }
@@ -91,13 +99,22 @@ function resolvePendingAnna(pendingId, text) {
 }
 
 async function fetchAnnaReply() {
-  const response = await fetch("/api/chat", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({ messages: conversation })
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+
+  let response;
+  try {
+    response = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ messages: conversation }),
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let message = `http ${response.status}`;
