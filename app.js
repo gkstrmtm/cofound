@@ -4,6 +4,13 @@ const recordButton = document.getElementById("recordButton");
 const promptSeed = document.getElementById("promptSeed");
 const appFrame = document.querySelector(".app-frame");
 const typeInstead = document.getElementById("typeInstead");
+const promptTryText = document.getElementById("promptTryText");
+
+const volumeWrap = document.getElementById("volumeWrap");
+const volumeButton = document.getElementById("volumeButton");
+const volumePanel = document.getElementById("volumePanel");
+const volumeSlider = document.getElementById("volumeSlider");
+const muteButton = document.getElementById("muteButton");
 
 const menuButton = document.getElementById("menuButton");
 const menuDrawer = document.getElementById("menuDrawer");
@@ -48,7 +55,9 @@ const STORAGE_KEYS = {
   subscription: "anna:subscription",
   voiceReplies: "anna:voiceReplies",
   elevenVoiceId: "anna:elevenVoiceId",
-  elevenVoiceName: "anna:elevenVoiceName"
+  elevenVoiceName: "anna:elevenVoiceName",
+  outputVolume: "anna:outputVolume",
+  outputMuted: "anna:outputMuted"
 };
 
 let transcriptEntries = [];
@@ -73,6 +82,74 @@ let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
 let audioCtx = null;
 let ttsFetchChain = Promise.resolve();
+
+function clamp01(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, num));
+}
+
+function getMuted() {
+  return (localStorage.getItem(STORAGE_KEYS.outputMuted) || "false") === "true";
+}
+
+function getStoredVolume() {
+  const raw = localStorage.getItem(STORAGE_KEYS.outputVolume);
+  if (raw == null || raw === "") {
+    return 0.85;
+  }
+  return clamp01(raw);
+}
+
+function getOutputVolume() {
+  return getMuted() ? 0 : getStoredVolume();
+}
+
+function setMuted(isMuted) {
+  localStorage.setItem(STORAGE_KEYS.outputMuted, isMuted ? "true" : "false");
+  renderVolumeUi();
+  // update currently playing audio
+  if (ttsCurrentAudio) {
+    try {
+      ttsCurrentAudio.volume = getOutputVolume();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function setStoredVolume(next) {
+  localStorage.setItem(STORAGE_KEYS.outputVolume, String(clamp01(next)));
+  renderVolumeUi();
+  if (ttsCurrentAudio) {
+    try {
+      ttsCurrentAudio.volume = getOutputVolume();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function setVolumePanelOpen(isOpen) {
+  if (!volumePanel) {
+    return;
+  }
+  volumePanel.classList.toggle("open", isOpen);
+  volumePanel.setAttribute("aria-hidden", String(!isOpen));
+}
+
+function renderVolumeUi() {
+  if (volumeSlider) {
+    volumeSlider.value = String(Math.round(getStoredVolume() * 100));
+  }
+  if (muteButton) {
+    const muted = getMuted();
+    muteButton.classList.toggle("is-muted", muted);
+    muteButton.textContent = muted ? "unmute" : "mute";
+  }
+}
 
 const SILENT_WAV_DATA_URI =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
@@ -218,6 +295,7 @@ function playNextTts() {
   ttsIsPlaying = true;
   ttsCurrentUrl = url;
   const audio = new Audio(url);
+  audio.volume = getOutputVolume();
   ttsCurrentAudio = audio;
 
   audio.onended = () => {
@@ -689,6 +767,10 @@ async function loadVoicesIntoModal() {
 
 function playRecordBeep(isStarting) {
   try {
+    const volume = getOutputVolume();
+    if (volume <= 0.001) {
+      return;
+    }
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) {
       return;
@@ -707,7 +789,7 @@ function playRecordBeep(isStarting) {
     o.type = "sine";
     o.frequency.setValueAtTime(freq, now);
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.07, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.07 * volume, now + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
     o.connect(g);
@@ -803,7 +885,6 @@ function setListening(isListening) {
   if (!hasStarted) {
     hasStarted = true;
     appFrame?.classList.add("has-started");
-    typeInstead?.classList.remove("hidden");
   }
 
   if (isListening) {
@@ -864,6 +945,57 @@ typeInstead?.addEventListener("click", () => {
   }
   setModalOpen(textInputModal, true);
 });
+
+volumeButton?.addEventListener("click", (e) => {
+  e.preventDefault();
+  unlockAudioFromGesture();
+  const isOpen = volumePanel?.classList.contains("open");
+  setVolumePanelOpen(!isOpen);
+});
+
+muteButton?.addEventListener("click", (e) => {
+  e.preventDefault();
+  unlockAudioFromGesture();
+  setMuted(!getMuted());
+});
+
+volumeSlider?.addEventListener("input", () => {
+  unlockAudioFromGesture();
+  const next = clamp01(Number(volumeSlider.value) / 100);
+  setStoredVolume(next);
+  if (next > 0.01 && getMuted()) {
+    setMuted(false);
+  }
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (!volumePanel || !volumePanel.classList.contains("open")) {
+    return;
+  }
+  const target = event.target;
+  if (volumeWrap && target && volumeWrap.contains && volumeWrap.contains(target)) {
+    return;
+  }
+  setVolumePanelOpen(false);
+});
+
+function randomizeTryPrompt() {
+  if (!promptTryText) {
+    return;
+  }
+  const prompts = [
+    "hey anna, let's build our first startup",
+    "anna, help me find a startup idea i can launch fast",
+    "anna, what's a 7-day plan to validate my idea?",
+    "anna, ask me 5 questions to pick a niche",
+    "anna, help me write a landing page headline",
+    "anna, what should i build this weekend?",
+    "anna, help me price this product",
+    "anna, give me a go-to-market plan"
+  ];
+  const idx = Math.floor(Math.random() * prompts.length);
+  promptTryText.textContent = `“${prompts[idx]}”`;
+}
 
 function toggleListeningFromTap(event) {
   event?.preventDefault?.();
@@ -1102,3 +1234,5 @@ initBrandLogoImages();
 renderStartupName();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
+renderVolumeUi();
+randomizeTryPrompt();
