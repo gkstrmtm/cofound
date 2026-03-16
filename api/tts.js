@@ -13,6 +13,8 @@
 
 let cachedVoiceId = null;
 
+const { getElevenLabsKey } = require("./_elevenlabs");
+
 async function getVoiceId(apiKey) {
   const envVoiceId = (process.env.ELEVENLABS_VOICE_ID || "").trim();
   if (envVoiceId) {
@@ -54,11 +56,11 @@ module.exports = async (req, res) => {
     return res.status(405).json({ ok: false, error: "method not allowed" });
   }
 
-  const apiKey = (process.env.ELEVENLABS_API_KEY || "").trim();
+  const { key: apiKey, source } = getElevenLabsKey();
   if (!apiKey) {
     return res.status(500).json({
-      error: "missing ELEVENLABS_API_KEY",
-      hint: "set ELEVENLABS_API_KEY in vercel project settings (environment variables)"
+      error: "missing elevenlabs api key",
+      hint: "set ELEVENLABS_API_KEY (or XI_API_KEY) in vercel project settings (environment variables)"
     });
   }
 
@@ -74,10 +76,15 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: "text is required" });
   }
 
+  const requestedVoiceId =
+    (typeof payload.voiceId === "string" ? payload.voiceId : "") ||
+    (typeof payload.voice_id === "string" ? payload.voice_id : "");
+  const voiceOverride = String(requestedVoiceId || "").trim();
+
   const modelId = (process.env.ELEVENLABS_MODEL || "eleven_turbo_v2_5").trim();
 
   try {
-    const voiceId = await getVoiceId(apiKey);
+    const voiceId = voiceOverride || (await getVoiceId(apiKey));
 
     const elevenRes = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream`,
@@ -113,6 +120,7 @@ module.exports = async (req, res) => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Length", String(audioBuffer.length));
+    res.setHeader("X-ElevenLabs-Key-Source", source || "unknown");
     return res.status(200).send(audioBuffer);
   } catch (err) {
     const message = err && err.message ? String(err.message) : "elevenlabs request failed";

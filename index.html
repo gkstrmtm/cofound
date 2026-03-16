@@ -153,6 +153,14 @@
                   <span class="switch-track" aria-hidden="true"></span>
                 </label>
               </div>
+
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">voice</div>
+                  <div class="settings-subtitle" id="settingsVoice">auto</div>
+                </div>
+                <button type="button" class="glass-button" id="chooseVoice">choose</button>
+              </div>
             </div>
 
             <div class="modal-actions">
@@ -216,6 +224,23 @@
             <div class="modal-actions">
               <button type="button" class="glass-button" data-modal-close>cancel</button>
               <button type="button" class="glass-button primary" id="textInputSend">send</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="voiceModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="voice selection">
+            <div class="modal-header">
+              <h2>voice</h2>
+              <p>pick how anna sounds</p>
+            </div>
+
+            <div class="voice-status" id="voiceStatus">loading voices…</div>
+            <div class="voice-list" id="voiceList" role="list"></div>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button primary" data-modal-close>done</button>
             </div>
           </div>
         </section>

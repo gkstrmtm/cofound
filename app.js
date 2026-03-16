@@ -23,6 +23,12 @@ const settingsUserEmail = document.getElementById("settingsUserEmail");
 const settingsPayment = document.getElementById("settingsPayment");
 const settingsSubscription = document.getElementById("settingsSubscription");
 const voiceRepliesToggle = document.getElementById("voiceRepliesToggle");
+const settingsVoice = document.getElementById("settingsVoice");
+const chooseVoice = document.getElementById("chooseVoice");
+
+const voiceModal = document.getElementById("voiceModal");
+const voiceStatus = document.getElementById("voiceStatus");
+const voiceList = document.getElementById("voiceList");
 
 const editUserName = document.getElementById("editUserName");
 const editUserEmail = document.getElementById("editUserEmail");
@@ -46,7 +52,9 @@ const STORAGE_KEYS = {
   userEmail: "anna:userEmail",
   paymentMethod: "anna:paymentMethod",
   subscription: "anna:subscription",
-  voiceReplies: "anna:voiceReplies"
+  voiceReplies: "anna:voiceReplies",
+  elevenVoiceId: "anna:elevenVoiceId",
+  elevenVoiceName: "anna:elevenVoiceName"
 };
 
 let transcriptEntries = [];
@@ -130,6 +138,38 @@ function setVoiceRepliesEnabled(enabled) {
   if (!enabled) {
     stopAllTts();
   }
+}
+
+function getSelectedVoiceId() {
+  return (localStorage.getItem(STORAGE_KEYS.elevenVoiceId) || "").trim();
+}
+
+function getSelectedVoiceName() {
+  return (localStorage.getItem(STORAGE_KEYS.elevenVoiceName) || "").trim();
+}
+
+function setSelectedVoice(voiceId, voiceName) {
+  const id = String(voiceId || "").trim();
+  const name = String(voiceName || "").trim();
+  if (id) {
+    localStorage.setItem(STORAGE_KEYS.elevenVoiceId, id);
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.elevenVoiceId);
+  }
+  if (name) {
+    localStorage.setItem(STORAGE_KEYS.elevenVoiceName, name);
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.elevenVoiceName);
+  }
+  renderVoiceSetting();
+}
+
+function renderVoiceSetting() {
+  if (!settingsVoice) {
+    return;
+  }
+  const name = getSelectedVoiceName();
+  settingsVoice.textContent = name ? name : "auto";
 }
 
 function stopAllTts() {
@@ -224,7 +264,7 @@ function playNextTts() {
   });
 }
 
-async function enqueueElevenLabsTts(text) {
+async function enqueueElevenLabsTts(text, voiceIdOverride) {
   const cleaned = String(text || "").trim();
   if (!cleaned) {
     return;
@@ -238,10 +278,11 @@ async function enqueueElevenLabsTts(text) {
 
   const mySession = ttsSessionId;
   try {
+    const voiceId = String(voiceIdOverride || getSelectedVoiceId() || "").trim();
     const res = await fetch("/api/tts", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: cleaned })
+      body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
     });
     if (!res.ok) {
       return;
@@ -546,6 +587,132 @@ async function startStreamingAnnaReply(pendingId) {
   return cleanedFinal;
 }
 
+async function loadVoicesIntoModal() {
+  if (!voiceStatus || !voiceList) {
+    return;
+  }
+
+  voiceStatus.textContent = "loading voices…";
+  voiceList.innerHTML = "";
+
+  try {
+    const res = await fetch("/api/voices", { method: "GET" });
+    if (!res.ok) {
+      let msg = `couldn't load voices (http ${res.status})`;
+      try {
+        const data = await res.json();
+        if (data?.error) {
+          msg = String(data.error);
+        }
+      } catch {
+        // ignore
+      }
+      voiceStatus.textContent = msg;
+      return;
+    }
+
+    const data = await res.json();
+    const voices = Array.isArray(data?.voices) ? data.voices : [];
+    if (!voices.length) {
+      voiceStatus.textContent = "no voices found";
+      return;
+    }
+
+    voiceStatus.textContent = "";
+    const activeId = getSelectedVoiceId();
+
+    voices.forEach((v) => {
+      const id = String(v.voice_id || "").trim();
+      const name = String(v.name || "").trim() || "voice";
+      const category = String(v.category || "").trim();
+      if (!id) {
+        return;
+      }
+
+      const item = document.createElement("div");
+      item.className = `voice-item${activeId && activeId === id ? " active" : ""}`;
+      item.setAttribute("role", "listitem");
+
+      const meta = document.createElement("div");
+      meta.className = "voice-meta";
+      const title = document.createElement("div");
+      title.className = "voice-name";
+      title.textContent = name;
+      const sub = document.createElement("div");
+      sub.className = "voice-category";
+      sub.textContent = category ? category : "";
+      meta.appendChild(title);
+      meta.appendChild(sub);
+
+      const actions = document.createElement("div");
+      actions.className = "voice-actions";
+
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "voice-play";
+      play.textContent = "▶";
+      play.addEventListener("click", (e) => {
+        e.preventDefault();
+        unlockAudioFromGesture();
+        stopAllTts();
+        enqueueElevenLabsTts("hi, i'm anna. how can i help?", id);
+      });
+
+      const choose = document.createElement("button");
+      choose.type = "button";
+      choose.className = "glass-button";
+      choose.textContent = "use";
+      choose.addEventListener("click", (e) => {
+        e.preventDefault();
+        setSelectedVoice(id, name);
+        // rerender active state
+        loadVoicesIntoModal();
+      });
+
+      actions.appendChild(play);
+      actions.appendChild(choose);
+
+      item.appendChild(meta);
+      item.appendChild(actions);
+      voiceList.appendChild(item);
+    });
+  } catch {
+    voiceStatus.textContent = "couldn't load voices";
+  }
+}
+
+function playRecordBeep(isStarting) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      return;
+    }
+    audioCtx = audioCtx || new Ctx();
+    audioCtx.resume?.();
+    const ctx = audioCtx;
+
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+
+    const now = ctx.currentTime;
+    const duration = 0.08;
+    const freq = isStarting ? 880 : 440;
+
+    o.type = "sine";
+    o.frequency.setValueAtTime(freq, now);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.07, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start(now);
+    o.stop(now + duration);
+  } catch {
+    // ignore
+  }
+}
+
 function ensureSpeechRecognizer() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
@@ -685,6 +852,7 @@ function toggleListeningFromTap(event) {
   lastToggleAt = now;
 
   const isListening = recordButton?.classList.contains("listening");
+  playRecordBeep(!isListening);
   setListening(!isListening);
 }
 
@@ -737,11 +905,21 @@ function renderStartupName() {
   if (settingsUserEmail) settingsUserEmail.textContent = userEmail || "not set";
   if (settingsPayment) settingsPayment.textContent = payment || "not set";
   if (settingsSubscription) settingsSubscription.textContent = subscription;
+  renderVoiceSetting();
 }
 
 voiceRepliesToggle?.addEventListener("change", () => {
   unlockAudioFromGesture();
   setVoiceRepliesEnabled(Boolean(voiceRepliesToggle.checked));
+});
+
+chooseVoice?.addEventListener("click", () => {
+  renderVoiceSetting();
+  setModalOpen(settingsModal, false);
+  closeAllModals();
+  setModalOpen(voiceModal, true);
+  unlockAudioFromGesture();
+  loadVoicesIntoModal();
 });
 
 function setModalOpen(modal, isOpen) {
@@ -757,6 +935,7 @@ function closeAllModals() {
   setModalOpen(settingsModal, false);
     setModalOpen(textInputModal, false);
   setModalOpen(accountModal, false);
+  setModalOpen(voiceModal, false);
   }
 
 function wireModalClose(modal) {
@@ -775,6 +954,7 @@ wireModalClose(startupNameModal);
 wireModalClose(settingsModal);
 wireModalClose(textInputModal);
 wireModalClose(accountModal);
+wireModalClose(voiceModal);
 
 function openAccountModal(focusField) {
   if (accountName) accountName.value = getAccountValue(STORAGE_KEYS.userName);
@@ -897,3 +1077,4 @@ accountSave?.addEventListener("click", () => {
 initBrandLogoImages();
 renderStartupName();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
+renderVoiceSetting();
