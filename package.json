@@ -1,0 +1,9 @@
+{
+  "name": "cofound",
+  "private": true,
+  "version": "0.0.0",
+  "description": "anna cofound prototype (static + vercel api)",
+  "engines": {
+    "node": ">=18"
+  }
+}

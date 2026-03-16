@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Anna Cofound App</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="prototype-layout">
+      <section class="app-frame" aria-label="anna cofound mobile app">
+        <header class="topbar">
+          <button class="icon-button" id="menuButton" aria-label="menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+        </header>
+
+        <aside class="menu-drawer" id="menuDrawer" aria-hidden="true">
+          <button class="menu-scrim" id="menuScrim" aria-label="close menu"></button>
+          <div class="menu-panel" role="dialog" aria-label="menu">
+            <button class="menu-close" id="menuClose" aria-label="close">×</button>
+            <nav class="menu-list" aria-label="menu items">
+              <button type="button" class="menu-item" id="startupNameButton">name your startup</button>
+              <button type="button" class="menu-item" id="settingsButton">settings</button>
+            </nav>
+          </div>
+        </aside>
+
+        <section class="chat-stage" aria-live="polite">
+          <div class="logo-stage" id="logoStage">
+            <div class="anna-logo anna-logo-large pulse" aria-hidden="true">
+              <img
+                class="logo-image"
+                src="brand/1.png"
+                alt="anna cofound logo"
+                decoding="async"
+                fetchpriority="high"
+              />
+              <span class="logo-triangle"></span>
+              <span class="logo-orb"></span>
+            </div>
+          </div>
+
+          <div class="prompt-seed" id="promptSeed">
+            <span>try:</span>
+            <strong>“hey anna, let’s build our first startup”</strong>
+          </div>
+
+          <div class="transcript-stack hidden" id="transcriptStack" aria-live="polite"></div>
+        </section>
+
+        <button class="record-orb" id="recordButton" aria-label="talk">
+          <div class="anna-logo anna-logo-small" aria-hidden="true">
+            <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+            <span class="logo-triangle"></span>
+            <span class="logo-orb"></span>
+          </div>
+        </button>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
