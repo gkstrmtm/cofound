@@ -75,7 +75,7 @@ const SILENT_WAV_DATA_URI =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 
 function unlockAudioFromGesture() {
-  if (audioUnlockAttempted) {
+  if (audioUnlockAttempted && !ttsNeedsUnlock) {
     return;
   }
   audioUnlockAttempted = true;
@@ -740,6 +740,7 @@ function renderStartupName() {
 }
 
 voiceRepliesToggle?.addEventListener("change", () => {
+  unlockAudioFromGesture();
   setVoiceRepliesEnabled(Boolean(voiceRepliesToggle.checked));
 });
 
