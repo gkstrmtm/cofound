@@ -10,7 +10,7 @@ const startupTitle = document.getElementById("startupTitle");
 const startupPageLink = document.getElementById("startupPageLink");
 
 const startupNameText = document.getElementById("startupNameText");
-const daysToLaunchEl = document.getElementById("daysToLaunch");
+const lastUpdatedEl = document.getElementById("lastUpdated");
 const projectsLeftEl = document.getElementById("projectsLeft");
 const startupTasksEl = document.getElementById("startupTasks");
 
@@ -68,9 +68,21 @@ const textInputField = document.getElementById("textInputField");
 const textInputSend = document.getElementById("textInputSend");
 
 const authModal = document.getElementById("authModal");
-const authNameInput = document.getElementById("authNameInput");
-const authEmailInput = document.getElementById("authEmailInput");
-const authContinue = document.getElementById("authContinue");
+const authPanelSignIn = document.getElementById("authPanelSignIn");
+const authPanelSignUp = document.getElementById("authPanelSignUp");
+const authError = document.getElementById("authError");
+
+const authSignInEmail = document.getElementById("authSignInEmail");
+const authSignInPassword = document.getElementById("authSignInPassword");
+const authSignInButton = document.getElementById("authSignInButton");
+const authToSignUp = document.getElementById("authToSignUp");
+
+const authSignUpName = document.getElementById("authSignUpName");
+const authSignUpEmail = document.getElementById("authSignUpEmail");
+const authSignUpPassword = document.getElementById("authSignUpPassword");
+const authSignUpConfirm = document.getElementById("authSignUpConfirm");
+const authSignUpButton = document.getElementById("authSignUpButton");
+const authToSignIn = document.getElementById("authToSignIn");
 
 const STORAGE_KEYS = {
   startupName: "anna:startupName",
@@ -83,8 +95,10 @@ const STORAGE_KEYS = {
   elevenVoiceName: "anna:elevenVoiceName",
   outputVolume: "anna:outputVolume",
   outputMuted: "anna:outputMuted",
+  authUsers: "anna:authUsers",
   authUser: "anna:authUser",
-  memoryLog: "anna:memoryLog"
+  memoryLog: "anna:memoryLog",
+  startupLists: "anna:startupLists"
 };
 
 let transcriptEntries = [];
@@ -130,12 +144,16 @@ function writeJson(key, value) {
   }
 }
 
+function normalizeEmail(raw) {
+  return String(raw || "").trim().toLowerCase();
+}
+
 function getAuthUser() {
   const user = readJson(STORAGE_KEYS.authUser, null);
   if (!user || typeof user !== "object") {
     return null;
   }
-  const email = String(user.email || "").trim();
+  const email = normalizeEmail(user.email);
   if (!email) {
     return null;
   }
@@ -146,13 +164,137 @@ function getAuthUser() {
   };
 }
 
-function setAuthUser(user) {
+function setAuthSession(user) {
   const name = String(user?.name || "").trim();
-  const email = String(user?.email || "").trim().toLowerCase();
+  const email = normalizeEmail(user?.email);
   if (!email) {
     return;
   }
   writeJson(STORAGE_KEYS.authUser, { name, email, createdAt: Date.now() });
+}
+
+function readAuthUsers() {
+  const users = readJson(STORAGE_KEYS.authUsers, {});
+  return users && typeof users === "object" ? users : {};
+}
+
+function writeAuthUsers(users) {
+  writeJson(STORAGE_KEYS.authUsers, users && typeof users === "object" ? users : {});
+}
+
+function hasAnyAuthUsers() {
+  const users = readAuthUsers();
+  return Object.keys(users).length > 0;
+}
+
+async function sha256Hex(text) {
+  const input = String(text || "");
+  const enc = new TextEncoder();
+  const buf = enc.encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function hashPassword(email, password) {
+  const e = normalizeEmail(email);
+  const p = String(password || "");
+  return sha256Hex(`anna|${e}|${p}`);
+}
+
+function setAuthMode(mode) {
+  const isSignIn = mode === "sign-in";
+  authPanelSignIn?.classList.toggle("hidden", !isSignIn);
+  authPanelSignUp?.classList.toggle("hidden", isSignIn);
+  if (authError) {
+    authError.textContent = "";
+  }
+}
+
+function setAuthError(message) {
+  if (!authError) {
+    return;
+  }
+  authError.textContent = String(message || "").trim();
+}
+
+function openAuthModal(mode) {
+  if (!authModal) {
+    return;
+  }
+  closeAllModals();
+  setModalOpen(authModal, true);
+
+  const effectiveMode = mode || (hasAnyAuthUsers() ? "sign-in" : "sign-up");
+  setAuthMode(effectiveMode);
+
+  if (effectiveMode === "sign-in") {
+    if (authSignInEmail) authSignInEmail.value = "";
+    if (authSignInPassword) authSignInPassword.value = "";
+    requestAnimationFrame(() => authSignInEmail?.focus?.());
+  } else {
+    if (authSignUpName) authSignUpName.value = "";
+    if (authSignUpEmail) authSignUpEmail.value = "";
+    if (authSignUpPassword) authSignUpPassword.value = "";
+    if (authSignUpConfirm) authSignUpConfirm.value = "";
+    requestAnimationFrame(() => authSignUpEmail?.focus?.());
+  }
+}
+
+async function signUpWithPassword() {
+  const name = String(authSignUpName?.value || "").trim();
+  const email = normalizeEmail(authSignUpEmail?.value);
+  const password = String(authSignUpPassword?.value || "");
+  const confirm = String(authSignUpConfirm?.value || "");
+
+  if (!email) {
+    authSignUpEmail?.focus?.();
+    throw new Error("email required");
+  }
+  if (!password || password.length < 8) {
+    authSignUpPassword?.focus?.();
+    throw new Error("password must be at least 8 characters");
+  }
+  if (password !== confirm) {
+    authSignUpConfirm?.focus?.();
+    throw new Error("passwords don't match");
+  }
+
+  const users = readAuthUsers();
+  if (users[email]) {
+    throw new Error("account already exists. sign in instead.");
+  }
+
+  const passwordHash = await hashPassword(email, password);
+  users[email] = { name, email, passwordHash, createdAt: Date.now() };
+  writeAuthUsers(users);
+  setAuthSession({ name, email });
+}
+
+async function signInWithPassword() {
+  const email = normalizeEmail(authSignInEmail?.value);
+  const password = String(authSignInPassword?.value || "");
+
+  if (!email) {
+    authSignInEmail?.focus?.();
+    throw new Error("email required");
+  }
+  if (!password) {
+    authSignInPassword?.focus?.();
+    throw new Error("password required");
+  }
+
+  const users = readAuthUsers();
+  const user = users[email];
+  if (!user || !user.passwordHash) {
+    throw new Error("no account found. sign up first.");
+  }
+  const passwordHash = await hashPassword(email, password);
+  if (passwordHash !== String(user.passwordHash)) {
+    throw new Error("incorrect password");
+  }
+  setAuthSession({ name: String(user.name || "").trim(), email });
 }
 
 function ensureSignedIn() {
@@ -163,12 +305,13 @@ function ensureSignedIn() {
   if (user) {
     return true;
   }
-  closeAllModals();
-  setModalOpen(authModal, true);
-  requestAnimationFrame(() => {
-    authEmailInput?.focus?.();
-  });
+  openAuthModal();
   return false;
+}
+
+function getCurrentUserId() {
+  const user = getAuthUser();
+  return user ? user.email : "anonymous";
 }
 
 function readMemoryLog() {
@@ -181,8 +324,7 @@ function appendToMemory(role, content) {
   if (!text) {
     return;
   }
-  const user = getAuthUser();
-  const userId = user ? user.email : "anonymous";
+  const userId = getCurrentUserId();
   const log = readMemoryLog();
   const entry = {
     role,
@@ -211,7 +353,7 @@ function buildMessagesForApi() {
   const nowIso = new Date().toISOString();
   const user = getAuthUser();
   const log = readMemoryLog();
-  const currentUserId = user ? user.email : "anonymous";
+  const currentUserId = getCurrentUserId();
 
   const now = Date.now();
   const older = [];
@@ -317,6 +459,94 @@ function maybeShowListSheetFromAnna(text) {
     .join("");
   listSheetBody.innerHTML = `<div class="sheet-list">${html}</div>`;
   setListSheetOpen(true);
+
+  persistStartupList(extracted);
+}
+
+function readStartupLists() {
+  const lists = readJson(STORAGE_KEYS.startupLists, []);
+  return Array.isArray(lists) ? lists : [];
+}
+
+function writeStartupLists(lists) {
+  writeJson(STORAGE_KEYS.startupLists, Array.isArray(lists) ? lists : []);
+}
+
+function persistStartupList(extracted) {
+  const userId = getCurrentUserId();
+  if (userId === "anonymous") {
+    return;
+  }
+  const title = String(extracted?.title || "").trim().toLowerCase();
+  const items = Array.isArray(extracted?.items)
+    ? extracted.items
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 24)
+    : [];
+
+  if (!items.length) {
+    return;
+  }
+
+  const log = readStartupLists();
+  const entry = { title, items, ts: Date.now(), userId };
+  const next = [...log, entry].slice(-80);
+  writeStartupLists(next);
+}
+
+function renderStartupDashboard() {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl) {
+    return;
+  }
+
+  const userId = getCurrentUserId();
+  const lists = readStartupLists().filter((l) => String(l?.userId || "") === userId);
+  const latest = lists.length ? lists[lists.length - 1] : null;
+  const items = latest && Array.isArray(latest.items) ? latest.items : [];
+
+  if (projectsLeftEl) {
+    projectsLeftEl.textContent = String(items.length);
+  }
+
+  if (lastUpdatedEl) {
+    lastUpdatedEl.textContent = latest?.ts
+      ? formatRelativeTime(Date.now() - Number(latest.ts))
+      : "—";
+  }
+
+  if (!startupTasksEl) {
+    return;
+  }
+
+  startupTasksEl.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "startup-empty";
+    empty.textContent = "no tasks yet. ask anna for a to do list and it’ll show up here.";
+    startupTasksEl.appendChild(empty);
+    return;
+  }
+
+  items.slice(0, 18).forEach((titleText) => {
+    const title = String(titleText || "").trim();
+    if (!title) return;
+
+    const row = document.createElement("div");
+    row.className = "startup-task";
+
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "startup-task-title";
+    a.textContent = title;
+    a.addEventListener("click", (e) => e.preventDefault());
+
+    const check = document.createElement("div");
+    check.className = "startup-task-check";
+    row.appendChild(a);
+    row.appendChild(check);
+    startupTasksEl.appendChild(row);
+  });
 }
 
 function clamp01(value) {
@@ -346,6 +576,11 @@ function getOutputVolume() {
 function setMuted(isMuted) {
   localStorage.setItem(STORAGE_KEYS.outputMuted, isMuted ? "true" : "false");
   renderVolumeUi();
+
+  renderVoiceRepliesSettingUi();
+  if (isMuted) {
+    stopAllTts();
+  }
 
   if (ttsCurrentAudio) {
     try {
@@ -491,13 +726,28 @@ function getVoiceRepliesEnabled() {
   return (localStorage.getItem(STORAGE_KEYS.voiceReplies) || "true") === "true";
 }
 
+function isVoiceOutputEnabled() {
+  return getVoiceRepliesEnabled() && !getMuted();
+}
+
+function renderVoiceRepliesSettingUi() {
+  if (!voiceRepliesToggle) {
+    return;
+  }
+  const muted = getMuted();
+  if (muted) {
+    voiceRepliesToggle.checked = false;
+    voiceRepliesToggle.disabled = true;
+    return;
+  }
+  voiceRepliesToggle.disabled = false;
+  voiceRepliesToggle.checked = getVoiceRepliesEnabled();
+}
+
 function setVoiceRepliesEnabled(enabled) {
   localStorage.setItem(STORAGE_KEYS.voiceReplies, enabled ? "true" : "false");
-  if (voiceRepliesToggle) {
-    voiceRepliesToggle.checked = enabled;
-  }
-
-  if (!enabled) {
+  renderVoiceRepliesSettingUi();
+  if (!isVoiceOutputEnabled()) {
     stopAllTts();
   }
 }
@@ -675,7 +925,7 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
   if (!cleaned) {
     return;
   }
-  if (!getVoiceRepliesEnabled()) {
+  if (!isVoiceOutputEnabled()) {
     return;
   }
   if (isListeningNow) {
@@ -969,7 +1219,7 @@ function splitIntoSpeakableSegments(buffer) {
 }
 
 async function startStreamingAnnaReply(pendingId) {
-  if (getVoiceRepliesEnabled() && !isListeningNow) {
+  if (isVoiceOutputEnabled() && !isListeningNow) {
     stopAllTts();
   }
 
@@ -982,7 +1232,7 @@ async function startStreamingAnnaReply(pendingId) {
     displayFull += delta;
     setPendingAnnaText(pendingId, displayFull);
 
-    if (!getVoiceRepliesEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
+    if (!isVoiceOutputEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
       return;
     }
 
@@ -996,7 +1246,7 @@ async function startStreamingAnnaReply(pendingId) {
   resolvePendingAnna(pendingId, cleanedFinal);
   maybeShowListSheetFromAnna(cleanedFinal);
 
-  if (getVoiceRepliesEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
+  if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
     const leftover = String(speakBuffer || "").trim();
     if (leftover) {
       enqueueElevenLabsTts(leftover);
@@ -1568,9 +1818,6 @@ function getAccountValue(key) {
 }
 
 function renderStartupName() {
-  if (!startupNameButton) {
-    return;
-  }
   const name = getStartupName();
   if (startupNameButton) {
     startupNameButton.textContent = name ? name : "name your startup";
@@ -1613,53 +1860,7 @@ startupPageLink?.addEventListener("click", () => {
   setMenuOpen(false);
 });
 
-async function loadStartupBenchmarks() {
-  if (!daysToLaunchEl || !projectsLeftEl || !startupTasksEl) {
-    return;
-  }
-
-  try {
-    const res = await fetch("/api/benchmarks", { method: "GET" });
-    if (!res.ok) {
-      throw new Error(`http ${res.status}`);
-    }
-    const data = await res.json();
-    const days = Number(data?.days_to_launch);
-    const left = Number(data?.projects_left);
-    const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
-
-    if (Number.isFinite(days)) {
-      daysToLaunchEl.textContent = String(days);
-    }
-    if (Number.isFinite(left)) {
-      projectsLeftEl.textContent = String(left);
-    }
-
-    startupTasksEl.innerHTML = "";
-    tasks.slice(0, 12).forEach((t) => {
-      const title = String(t?.title || "").trim();
-      if (!title) return;
-      const row = document.createElement("div");
-      row.className = "startup-task";
-
-      const a = document.createElement("a");
-      a.href = "#";
-      a.className = "startup-task-title";
-      a.textContent = title;
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-      });
-
-      const check = document.createElement("div");
-      check.className = "startup-task-check";
-      row.appendChild(a);
-      row.appendChild(check);
-      startupTasksEl.appendChild(row);
-    });
-  } catch {
-    // keep the default values
-  }
-}
+// startup dashboard is driven by real lists captured from anna replies.
 
 voiceRepliesToggle?.addEventListener("change", () => {
   unlockAudioFromGesture();
@@ -1725,38 +1926,62 @@ function syncAuthIntoProfileFields() {
   }
 }
 
-function submitAuthFromModal() {
-  const name = String(authNameInput?.value || "").trim();
-  const email = String(authEmailInput?.value || "").trim();
-  if (!email) {
-    authEmailInput?.focus?.();
-    return;
-  }
-  setAuthUser({ name, email });
-  syncAuthIntoProfileFields();
-  renderStartupName();
-  setModalOpen(authModal, false);
-}
-
-authContinue?.addEventListener("click", (e) => {
+authToSignUp?.addEventListener("click", (e) => {
   e.preventDefault();
-  submitAuthFromModal();
+  setAuthMode("sign-up");
+  requestAnimationFrame(() => authSignUpEmail?.focus?.());
 });
 
-authEmailInput?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  submitAuthFromModal();
+authToSignIn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  setAuthMode("sign-in");
+  requestAnimationFrame(() => authSignInEmail?.focus?.());
 });
 
-authNameInput?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
+authSignUpButton?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  try {
+    setAuthError("");
+    await signUpWithPassword();
+    syncAuthIntoProfileFields();
+    renderStartupName();
+    renderStartupDashboard();
+    setModalOpen(authModal, false);
+  } catch (err) {
+    setAuthError(err?.message || "couldn't sign up");
   }
+});
+
+authSignInButton?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  try {
+    setAuthError("");
+    await signInWithPassword();
+    syncAuthIntoProfileFields();
+    renderStartupName();
+    renderStartupDashboard();
+    setModalOpen(authModal, false);
+  } catch (err) {
+    setAuthError(err?.message || "couldn't sign in");
+  }
+});
+
+authSignInPassword?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
   event.preventDefault();
-  submitAuthFromModal();
+  authSignInButton?.click?.();
+});
+
+authSignUpConfirm?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  authSignUpButton?.click?.();
+});
+
+authSignUpPassword?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  authSignUpButton?.click?.();
 });
 
 function openAccountModal(focusField) {
@@ -1810,16 +2035,26 @@ function sendTypedToAnna(rawText) {
 }
 
 startupNameButton?.addEventListener("click", () => {
+  openStartupNameModal();
+});
+
+startupNameText?.addEventListener("click", () => {
+  openStartupNameModal();
+});
+
+function openStartupNameModal() {
   const current = getStartupName();
   if (startupNameInput) {
     startupNameInput.value = current;
-    startupNameInput.focus();
-    startupNameInput.select();
   }
   setMenuOpen(false);
   closeAllModals();
   setModalOpen(startupNameModal, true);
-});
+  requestAnimationFrame(() => {
+    startupNameInput?.focus?.();
+    startupNameInput?.select?.();
+  });
+}
 
 startupNameSave?.addEventListener("click", () => {
   const value = String(startupNameInput?.value || "").trim();
@@ -1840,7 +2075,7 @@ settingsButton?.addEventListener("click", () => {
 
 settingsRename?.addEventListener("click", () => {
   setModalOpen(settingsModal, false);
-  startupNameButton?.click();
+  openStartupNameModal();
 });
 
 editProfile?.addEventListener("click", () => openAccountModal("name"));
@@ -1856,9 +2091,7 @@ accountSave?.addEventListener("click", () => {
   localStorage.setItem(STORAGE_KEYS.paymentMethod, nextPayment);
   localStorage.setItem(STORAGE_KEYS.subscription, nextSub || "starter");
 
-  if (nextEmail) {
-    setAuthUser({ name: nextName, email: nextEmail });
-  }
+  // auth requires a password; keep it separate from profile edits.
 
   renderStartupName();
   setModalOpen(accountModal, false);
@@ -1892,6 +2125,7 @@ renderStartupName();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();
+renderVoiceRepliesSettingUi();
 randomizeTryPrompt();
-loadStartupBenchmarks();
+renderStartupDashboard();
 ensureDefaultVoiceSelection();

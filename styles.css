@@ -961,6 +961,34 @@ button {
   margin-top: 0.4rem;
 }
 
+.auth-error {
+  min-height: 1.25rem;
+  margin: 0.1rem 0 0.6rem;
+  color: rgba(255, 154, 83, 0.95);
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+
+.auth-link {
+  margin-top: 0.7rem;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0.35rem 0.2rem;
+  color: var(--peach);
+  font-weight: 650;
+  text-align: center;
+}
+
+.startup-empty {
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .glass-button {
   padding: 0.85rem 0.9rem;
   border-radius: 16px;

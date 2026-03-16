@@ -136,7 +136,7 @@
 
         <section class="modal" id="authModal" aria-hidden="true">
           <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
-          <div class="modal-panel" role="dialog" aria-label="sign in">
+          <div class="modal-panel" role="dialog" aria-label="auth">
             <div class="modal-header">
               <div class="anna-logo anna-logo-modal" aria-hidden="true">
                 <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
@@ -144,24 +144,59 @@
                 <span class="logo-orb"></span>
               </div>
               <div>
-                <h2>sign in</h2>
-                <p>so anna can remember across days</p>
+                <h2>account</h2>
+                <p>sign in so anna can remember</p>
               </div>
             </div>
 
-            <label class="field">
-              <span class="field-label">name (optional)</span>
-              <input id="authNameInput" type="text" inputmode="text" autocomplete="name" />
-            </label>
+            <div class="auth-error" id="authError" aria-live="polite"></div>
 
-            <label class="field">
-              <span class="field-label">email</span>
-              <input id="authEmailInput" type="email" inputmode="email" autocomplete="email" />
-            </label>
+            <div id="authPanelSignIn">
+              <label class="field">
+                <span class="field-label">email</span>
+                <input id="authSignInEmail" type="email" inputmode="email" autocomplete="email" />
+              </label>
 
-            <div class="modal-actions">
-              <button type="button" class="glass-button" data-modal-close>not now</button>
-              <button type="button" class="glass-button primary" id="authContinue">continue</button>
+              <label class="field">
+                <span class="field-label">password</span>
+                <input id="authSignInPassword" type="password" autocomplete="current-password" />
+              </label>
+
+              <div class="modal-actions">
+                <button type="button" class="glass-button" data-modal-close>not now</button>
+                <button type="button" class="glass-button primary" id="authSignInButton">sign in</button>
+              </div>
+
+              <button type="button" class="auth-link" id="authToSignUp">need an account? sign up</button>
+            </div>
+
+            <div id="authPanelSignUp" class="hidden">
+              <label class="field">
+                <span class="field-label">name (optional)</span>
+                <input id="authSignUpName" type="text" inputmode="text" autocomplete="name" />
+              </label>
+
+              <label class="field">
+                <span class="field-label">email</span>
+                <input id="authSignUpEmail" type="email" inputmode="email" autocomplete="email" />
+              </label>
+
+              <label class="field">
+                <span class="field-label">password</span>
+                <input id="authSignUpPassword" type="password" autocomplete="new-password" />
+              </label>
+
+              <label class="field">
+                <span class="field-label">confirm password</span>
+                <input id="authSignUpConfirm" type="password" autocomplete="new-password" />
+              </label>
+
+              <div class="modal-actions">
+                <button type="button" class="glass-button" data-modal-close>not now</button>
+                <button type="button" class="glass-button primary" id="authSignUpButton">sign up</button>
+              </div>
+
+              <button type="button" class="auth-link" id="authToSignIn">already have an account? sign in</button>
             </div>
           </div>
         </section>
