@@ -27,11 +27,15 @@ const taskPageStatus = document.getElementById("taskPageStatus");
 const taskDoneToggle = document.getElementById("taskDoneToggle");
 const taskNotesInput = document.getElementById("taskNotesInput");
 const taskTalkButton = document.getElementById("taskTalkButton");
+const voiceTriggerButton = document.getElementById("voiceTriggerButton");
+const inlineVoiceButton = voiceTriggerButton || taskTalkButton;
 const taskBackLink = document.getElementById("taskBackLink");
 const taskRelatedList = document.getElementById("taskRelatedList");
 const taskSubtaskInput = document.getElementById("taskSubtaskInput");
 const taskSubtaskAdd = document.getElementById("taskSubtaskAdd");
 const taskSubtaskList = document.getElementById("taskSubtaskList");
+const inlineVoiceTray = document.getElementById("inlineVoiceTray");
+const inlineVoiceList = document.getElementById("inlineVoiceList");
 
 const listSheet = document.getElementById("listSheet");
 const listSheetScrim = document.getElementById("listSheetScrim");
@@ -153,6 +157,13 @@ let lastToggleAt = 0;
 let pendingSpeechCommitTimer = null;
 let finalSpeechBuffer = "";
 let typeComposerAllowBlur = false;
+let singleTurnVoiceMode = false;
+let wakeWordRecognizer = null;
+let wakeWordListeningNow = false;
+let passiveWakeWordEnabled = false;
+let wakeWordRestartTimer = null;
+let wakeWordDetectedAt = 0;
+let inlineVoiceHideTimer = null;
 let supabaseClient = null;
 let supabaseConfigured = false;
 let supabaseInitPromise = null;
@@ -178,7 +189,58 @@ let isAdjustingVolume = false;
 function updateListeningUi() {
   const isActive = persistentListeningEnabled || isListeningNow;
   recordButton?.classList.toggle("listening", isActive);
+  inlineVoiceButton?.classList.toggle("is-listening", isActive);
   appFrame?.classList.toggle("is-listening", isActive);
+  const inlineVoiceImage = inlineVoiceButton?.querySelector?.("img.logo-image");
+  if (inlineVoiceImage) {
+    inlineVoiceImage.setAttribute("src", isActive ? "brand/record-button-logo.png" : "brand/1.png");
+  }
+}
+
+function clearInlineVoiceHideTimer() {
+  if (inlineVoiceHideTimer) {
+    window.clearTimeout(inlineVoiceHideTimer);
+    inlineVoiceHideTimer = null;
+  }
+}
+
+function setInlineVoiceTrayOpen(isOpen) {
+  if (!inlineVoiceTray) {
+    return;
+  }
+  inlineVoiceTray.classList.toggle("open", isOpen);
+  inlineVoiceTray.classList.toggle("hidden", !isOpen);
+  inlineVoiceTray.setAttribute("aria-hidden", String(!isOpen));
+}
+
+function scheduleInlineVoiceTrayHide(delay = 7200) {
+  if (!inlineVoiceTray) {
+    return;
+  }
+  clearInlineVoiceHideTimer();
+  if (isListeningNow || annaReplyInFlight) {
+    return;
+  }
+  inlineVoiceHideTimer = window.setTimeout(() => {
+    if (isListeningNow || annaReplyInFlight) {
+      return;
+    }
+    setInlineVoiceTrayOpen(false);
+  }, delay);
+}
+
+function showInlineVoiceStatus(message, delay = 2600) {
+  if (!inlineVoiceList) {
+    return;
+  }
+  clearInlineVoiceHideTimer();
+  inlineVoiceList.innerHTML = "";
+  const paragraph = document.createElement("p");
+  paragraph.className = "transcript-line inline-voice-status ai";
+  paragraph.textContent = `“${String(message || "").trim()}”`;
+  inlineVoiceList.appendChild(paragraph);
+  setInlineVoiceTrayOpen(true);
+  scheduleInlineVoiceTrayHide(delay);
 }
 
 function clearPendingSpeechCommit() {
@@ -311,6 +373,164 @@ function stopSpeechRecognizer() {
   }
 }
 
+function clearWakeWordRestart() {
+  if (wakeWordRestartTimer) {
+    window.clearTimeout(wakeWordRestartTimer);
+    wakeWordRestartTimer = null;
+  }
+}
+
+function shouldUseWakeWordMode() {
+  return Boolean(inlineVoiceButton && inlineVoiceList && !recordButton);
+}
+
+function stopWakeWordListeningSession() {
+  clearWakeWordRestart();
+  if (!wakeWordRecognizer) {
+    wakeWordListeningNow = false;
+    return;
+  }
+  try {
+    wakeWordRecognizer.abort();
+  } catch {
+    try {
+      wakeWordRecognizer.stop();
+    } catch {
+      // ignore
+    }
+  }
+  wakeWordListeningNow = false;
+}
+
+function heardWakeWord(text) {
+  const normalized = String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /(?:^|\b)(?:hi|hey)\s+an{1,2}a\b/.test(normalized);
+}
+
+function scheduleWakeWordRestart(delay = 450) {
+  if (!passiveWakeWordEnabled || !shouldUseWakeWordMode()) {
+    return;
+  }
+  clearWakeWordRestart();
+  wakeWordRestartTimer = window.setTimeout(() => {
+    startWakeWordMonitoring();
+  }, delay);
+}
+
+function startInlineVoiceCapture(source = "tap") {
+  if (!shouldUseWakeWordMode()) {
+    return;
+  }
+  unlockAudioFromGesture();
+  const isStopping = persistentListeningEnabled || isListeningNow;
+  if (source === "tap" && isStopping) {
+    singleTurnVoiceMode = false;
+    pendingResumeListening = false;
+    persistentListeningEnabled = false;
+    setListening(false);
+    startWakeWordMonitoring();
+    return;
+  }
+  if (!ensureSignedIn()) {
+    scheduleWakeWordRestart(900);
+    return;
+  }
+  if (source === "tap") {
+    const now = Date.now();
+    if (now - lastToggleAt < 260) {
+      return;
+    }
+    lastToggleAt = now;
+  }
+  stopWakeWordListeningSession();
+  clearInlineVoiceHideTimer();
+  setInlineVoiceTrayOpen(true);
+  singleTurnVoiceMode = true;
+  persistentListeningEnabled = true;
+  pendingResumeListening = false;
+  playRecordBeep(true);
+  setListening(true);
+}
+
+function ensureWakeWordRecognizer() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    return null;
+  }
+
+  const recognizer = new SpeechRecognition();
+  recognizer.continuous = true;
+  recognizer.interimResults = true;
+  recognizer.lang = "en-US";
+
+  recognizer.onresult = (event) => {
+    const heardParts = [];
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const result = event.results[i];
+      const text = String(result[0]?.transcript || "").trim().toLowerCase();
+      if (text) {
+        heardParts.push(text);
+      }
+    }
+    const combined = normalizeBufferedSpeechParts(heardParts);
+    if (!combined || !heardWakeWord(combined)) {
+      return;
+    }
+    const now = Date.now();
+    if (now - wakeWordDetectedAt < 1600) {
+      return;
+    }
+    wakeWordDetectedAt = now;
+    startInlineVoiceCapture("wake");
+  };
+
+  recognizer.onerror = (event) => {
+    wakeWordListeningNow = false;
+    if (event?.error === "not-allowed" || event?.error === "service-not-allowed") {
+      passiveWakeWordEnabled = false;
+      showInlineVoiceStatus("tap anna once to enable the mic here.", 4200);
+      return;
+    }
+    scheduleWakeWordRestart(1200);
+  };
+
+  recognizer.onend = () => {
+    wakeWordListeningNow = false;
+    if (passiveWakeWordEnabled && !isListeningNow && !persistentListeningEnabled && !annaReplyInFlight) {
+      scheduleWakeWordRestart(500);
+    }
+  };
+
+  return recognizer;
+}
+
+function startWakeWordMonitoring() {
+  if (!shouldUseWakeWordMode()) {
+    return;
+  }
+  passiveWakeWordEnabled = true;
+  if (isListeningNow || persistentListeningEnabled || annaReplyInFlight) {
+    return;
+  }
+  if (!wakeWordRecognizer) {
+    wakeWordRecognizer = ensureWakeWordRecognizer();
+  }
+  if (!wakeWordRecognizer || wakeWordListeningNow) {
+    return;
+  }
+  try {
+    wakeWordRecognizer.start();
+    wakeWordListeningNow = true;
+  } catch {
+    scheduleWakeWordRestart(800);
+  }
+}
+
 function resumePersistentListeningSoon(delay = 140) {
   window.setTimeout(() => {
     if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow || !speechRecognizer) {
@@ -328,6 +548,15 @@ function maybeResumeListeningAfterReply() {
     return;
   }
   if (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0) {
+    return;
+  }
+  if (singleTurnVoiceMode) {
+    singleTurnVoiceMode = false;
+    pendingResumeListening = false;
+    persistentListeningEnabled = false;
+    updateListeningUi();
+    scheduleInlineVoiceTrayHide(8200);
+    startWakeWordMonitoring();
     return;
   }
   resumePersistentListeningSoon(120);
@@ -1496,14 +1725,14 @@ function buildMessagesForApi() {
 }
 
 function ensureStartedUi() {
-  if (!appFrame || !transcriptPane) {
-    return;
-  }
   if (!hasStarted) {
     hasStarted = true;
-    appFrame.classList.add("has-started");
+    appFrame?.classList.add("has-started");
   }
-  transcriptPane.classList.remove("hidden");
+  transcriptPane?.classList.remove("hidden");
+  if (inlineVoiceTray && (persistentListeningEnabled || isListeningNow || annaReplyInFlight)) {
+    setInlineVoiceTrayOpen(true);
+  }
 }
 
 function setListSheetOpen(isOpen) {
@@ -1893,7 +2122,9 @@ function renderTaskWorkspace() {
     taskSubtaskAdd.disabled = false;
   }
   if (taskTalkButton) {
-    taskTalkButton.href = buildTalkHref(title);
+    if (taskTalkButton.tagName === "A") {
+      taskTalkButton.href = buildTalkHref(title);
+    }
   }
   if (taskBackLink) {
     taskBackLink.href = "startup.html";
@@ -2155,6 +2386,7 @@ function unlockAudioFromGesture() {
 function primeAudioUnlockOnFirstGesture() {
   const once = () => {
     unlockAudioFromGesture();
+    startWakeWordMonitoring();
     document.removeEventListener("pointerdown", once, true);
     document.removeEventListener("touchstart", once, true);
     document.removeEventListener("click", once, true);
@@ -2506,8 +2738,13 @@ function scrollTranscriptIfNeeded() {
   }
 }
 
+function getRenderedTranscriptHost() {
+  return transcriptList || inlineVoiceList || null;
+}
+
 function appendLine(role, text, opts = {}) {
-  if (!transcriptList) {
+  const host = getRenderedTranscriptHost();
+  if (!host) {
     return null;
   }
   const paragraph = document.createElement("p");
@@ -2516,7 +2753,14 @@ function appendLine(role, text, opts = {}) {
   if (opts.pendingId) {
     paragraph.dataset.pendingId = opts.pendingId;
   }
-  transcriptList.appendChild(paragraph);
+  host.appendChild(paragraph);
+  if (host === inlineVoiceList) {
+    setInlineVoiceTrayOpen(true);
+    clearInlineVoiceHideTimer();
+    while (host.children.length > 3) {
+      host.firstElementChild?.remove();
+    }
+  }
   scrollTranscriptIfNeeded();
   return paragraph;
 }
@@ -2537,6 +2781,9 @@ function setInterim(nextText) {
     return;
   }
   interimEl.textContent = `“${cleaned}”`;
+  if (inlineVoiceTray && !transcriptList) {
+    setInlineVoiceTrayOpen(true);
+  }
   scrollTranscriptIfNeeded();
 }
 
@@ -2556,6 +2803,9 @@ function pushEntry(role, text) {
   transcriptEntries = [...transcriptEntries, { role, text: cleaned }].slice(-80);
   appendChatSessionEntry(role, cleaned);
   appendLine(role, cleaned);
+  if (!transcriptList) {
+    scheduleInlineVoiceTrayHide();
+  }
 }
 
 function pushPendingAnna() {
@@ -2579,11 +2829,14 @@ function setPendingAnnaText(pendingId, text) {
 
   const el =
     pendingEls.get(pendingId) ||
-    (transcriptList &&
-      transcriptList.querySelector &&
-      transcriptList.querySelector(`[data-pending-id="${pendingId}"]`));
+    (getRenderedTranscriptHost() &&
+      getRenderedTranscriptHost().querySelector &&
+      getRenderedTranscriptHost().querySelector(`[data-pending-id="${pendingId}"]`));
   if (el) {
     el.textContent = `“${cleaned}”`;
+  }
+  if (!transcriptList) {
+    setInlineVoiceTrayOpen(true);
   }
   scrollTranscriptIfNeeded();
 }
@@ -2597,13 +2850,17 @@ function resolvePendingAnna(pendingId, text) {
     return { role: "ai", text: cleaned };
   });
 
-  const el = pendingEls.get(pendingId) || (transcriptList && transcriptList.querySelector && transcriptList.querySelector(`[data-pending-id="${pendingId}"]`));
+  const host = getRenderedTranscriptHost();
+  const el = pendingEls.get(pendingId) || (host && host.querySelector && host.querySelector(`[data-pending-id="${pendingId}"]`));
   if (el) {
     el.textContent = `“${cleaned}”`;
   }
   pendingEls.delete(pendingId);
   if (cleaned && cleaned !== "…") {
     appendChatSessionEntry("ai", cleaned);
+  }
+  if (!transcriptList) {
+    scheduleInlineVoiceTrayHide(8400);
   }
   scrollTranscriptIfNeeded();
 }
@@ -3002,13 +3259,14 @@ function ensureSpeechRecognizer() {
 }
 
 function setListening(isListening) {
-  if (!recordButton || !transcriptPane) {
+  if (!recordButton && !inlineVoiceButton && !transcriptPane && !inlineVoiceList) {
     return;
   }
 
   isListeningNow = isListening;
   if (isListening) {
     pendingResumeListening = false;
+    clearInlineVoiceHideTimer();
   } else {
     clearBufferedSpeech();
   }
@@ -3044,22 +3302,29 @@ function setListening(isListening) {
 
     // fallback: typed line via prompt (still real input)
     // fallback if speech recognition isn't available
-      closeAllModals();
-      if (textInputField) {
-        textInputField.value = "";
-        requestAnimationFrame(() => {
-          textInputField.focus();
-        });
-      }
+    closeAllModals();
+    if (textInputField) {
+      textInputField.value = "";
+      requestAnimationFrame(() => {
+        textInputField.focus();
+      });
       setModalOpen(textInputModal, true);
+    } else {
+      showInlineVoiceStatus("voice input isn't available in this browser.", 4200);
+    }
     persistentListeningEnabled = false;
+    singleTurnVoiceMode = false;
     updateListeningUi();
+    startWakeWordMonitoring();
     return;
   }
 
   interimText = "";
   setInterim("");
   stopSpeechRecognizer();
+  if (!transcriptList) {
+    scheduleInlineVoiceTrayHide();
+  }
 }
 
 typeInstead?.addEventListener("click", () => {
@@ -3319,6 +3584,7 @@ function toggleListeningFromTap(event) {
   lastToggleAt = now;
 
   const nextActive = !persistentListeningEnabled;
+  singleTurnVoiceMode = false;
   persistentListeningEnabled = nextActive;
   pendingResumeListening = false;
   playRecordBeep(nextActive);
@@ -3336,6 +3602,15 @@ if (recordButton) {
     recordButton.addEventListener("click", toggleListeningFromTap);
   }
 }
+
+inlineVoiceButton?.addEventListener("pointerdown", () => {
+  unlockAudioFromGesture();
+});
+
+inlineVoiceButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  startInlineVoiceCapture("tap");
+});
 
 function setMenuOpen(isOpen) {
   if (!menuDrawer) {
@@ -3402,6 +3677,9 @@ startupPageLink?.addEventListener("click", () => {
 });
 
 taskTalkButton?.addEventListener("click", () => {
+  if (taskTalkButton?.tagName !== "A") {
+    return;
+  }
   const title = getCurrentTaskTitle();
   if (!title) {
     return;
@@ -3647,6 +3925,7 @@ function refreshUiFromStoredState() {
   renderTaskWorkspace();
   setSelectedSubscription(getAccountValue(STORAGE_KEYS.subscription) || "starter");
   renderHistoryModal();
+  startWakeWordMonitoring();
 }
 
 async function bootstrapAuthAndState() {
@@ -3794,6 +4073,9 @@ function sendTypedToAnna(rawText) {
   }
 
   ensureStartedUi();
+  if (!transcriptList) {
+    setInlineVoiceTrayOpen(true);
+  }
   if (!ensureSignedIn()) {
     return;
   }
@@ -3927,3 +4209,4 @@ bootstrapAuthAndState().catch((err) => {
   refreshUiFromStoredState();
 });
 ensureDefaultVoiceSelection();
+startWakeWordMonitoring();

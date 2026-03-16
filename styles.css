@@ -109,8 +109,78 @@ button {
   justify-content: flex-end;
 }
 
-.topbar-logo-link {
-  text-decoration: none;
+.topbar-voice-button {
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  color: var(--olive);
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.topbar-voice-logo {
+  width: 34px;
+  height: 34px;
+}
+
+.topbar-voice-button.is-listening .record-logo {
+  animation: record-rotate 5.8s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.topbar-voice-button.is-listening {
+  box-shadow: 0 16px 32px rgba(255, 154, 83, 0.18);
+}
+
+.inline-voice-tray {
+  position: absolute;
+  top: 4.45rem;
+  left: 0.85rem;
+  right: 0.85rem;
+  z-index: 4;
+  opacity: 0;
+  transform: translateY(-10px);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.inline-voice-tray.open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.inline-voice-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.inline-voice-list .transcript-line {
+  margin: 0;
+  text-align: left;
+  font-size: 0.98rem;
+  line-height: 1.42;
+  padding: 0.8rem 0.9rem;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(126, 178, 88, 0.12));
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  box-shadow: 0 16px 30px rgba(39, 72, 0, 0.1);
+}
+
+.inline-voice-list .transcript-line.ai {
+  color: var(--peach);
+}
+
+.inline-voice-list .transcript-line.user,
+.inline-voice-list .transcript-line.inline-voice-status {
+  color: var(--olive);
+}
+
+.inline-voice-list .transcript-line.interim {
+  opacity: 0.78;
 }
 
 .task-context-banner {

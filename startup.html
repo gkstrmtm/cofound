@@ -25,14 +25,18 @@
 
           <div class="topbar-spacer" aria-hidden="true"></div>
 
-          <a class="topbar-logo topbar-logo-link" href="index.html" aria-label="talk to anna">
-            <div class="anna-logo anna-logo-small image-loaded">
+          <button class="topbar-logo topbar-voice-button" id="voiceTriggerButton" type="button" aria-label="talk to anna">
+            <div class="anna-logo anna-logo-small topbar-voice-logo record-logo image-loaded" aria-hidden="true">
               <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
               <span class="logo-triangle"></span>
               <span class="logo-orb"></span>
             </div>
-          </a>
+          </button>
         </header>
+
+        <section class="inline-voice-tray hidden" id="inlineVoiceTray" aria-hidden="true" aria-live="polite">
+          <div class="inline-voice-list" id="inlineVoiceList"></div>
+        </section>
 
         <aside class="menu-drawer" id="menuDrawer" aria-hidden="true">
           <button class="menu-scrim" id="menuScrim" aria-label="close menu" type="button"></button>
