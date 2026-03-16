@@ -18,15 +18,33 @@ const startupNameSave = document.getElementById("startupNameSave");
 const settingsModal = document.getElementById("settingsModal");
 const settingsStartupName = document.getElementById("settingsStartupName");
 const settingsRename = document.getElementById("settingsRename");
-const clearTranscript = document.getElementById("clearTranscript");
-const clearConversation = document.getElementById("clearConversation");
+const settingsUserName = document.getElementById("settingsUserName");
+const settingsUserEmail = document.getElementById("settingsUserEmail");
+const settingsPayment = document.getElementById("settingsPayment");
+const settingsSubscription = document.getElementById("settingsSubscription");
+
+const editUserName = document.getElementById("editUserName");
+const editUserEmail = document.getElementById("editUserEmail");
+const editPayment = document.getElementById("editPayment");
+const editSubscription = document.getElementById("editSubscription");
+
+const accountModal = document.getElementById("accountModal");
+const accountName = document.getElementById("accountName");
+const accountEmail = document.getElementById("accountEmail");
+const accountPayment = document.getElementById("accountPayment");
+const accountSubscription = document.getElementById("accountSubscription");
+const accountSave = document.getElementById("accountSave");
 
 const textInputModal = document.getElementById("textInputModal");
 const textInputField = document.getElementById("textInputField");
 const textInputSend = document.getElementById("textInputSend");
 
 const STORAGE_KEYS = {
-  startupName: "anna:startupName"
+  startupName: "anna:startupName",
+  userName: "anna:userName",
+  userEmail: "anna:userEmail",
+  paymentMethod: "anna:paymentMethod",
+  subscription: "anna:subscription"
 };
 
 let transcriptEntries = [];
@@ -279,6 +297,13 @@ recordButton?.addEventListener("click", () => {
   setListening(!isListening);
 });
 
+recordButton?.addEventListener("pointerup", (event) => {
+  // improves reliability on some mobile browsers where click can be swallowed
+  event.preventDefault();
+  const isListening = recordButton.classList.contains("listening");
+  setListening(!isListening);
+});
+
 function setMenuOpen(isOpen) {
   if (!menuDrawer) {
     return;
@@ -296,6 +321,10 @@ function getStartupName() {
   return localStorage.getItem(STORAGE_KEYS.startupName) || "";
 }
 
+function getAccountValue(key) {
+  return localStorage.getItem(key) || "";
+}
+
 function renderStartupName() {
   if (!startupNameButton) {
     return;
@@ -305,6 +334,16 @@ function renderStartupName() {
   if (settingsStartupName) {
     settingsStartupName.textContent = name ? name : "not set";
   }
+
+  const userName = getAccountValue(STORAGE_KEYS.userName);
+  const userEmail = getAccountValue(STORAGE_KEYS.userEmail);
+  const payment = getAccountValue(STORAGE_KEYS.paymentMethod);
+  const subscription = getAccountValue(STORAGE_KEYS.subscription) || "starter";
+
+  if (settingsUserName) settingsUserName.textContent = userName || "not set";
+  if (settingsUserEmail) settingsUserEmail.textContent = userEmail || "not set";
+  if (settingsPayment) settingsPayment.textContent = payment || "not set";
+  if (settingsSubscription) settingsSubscription.textContent = subscription;
 }
 
 function setModalOpen(modal, isOpen) {
@@ -319,6 +358,7 @@ function closeAllModals() {
   setModalOpen(startupNameModal, false);
   setModalOpen(settingsModal, false);
     setModalOpen(textInputModal, false);
+  setModalOpen(accountModal, false);
   }
 
 function wireModalClose(modal) {
@@ -336,6 +376,28 @@ function wireModalClose(modal) {
 wireModalClose(startupNameModal);
 wireModalClose(settingsModal);
 wireModalClose(textInputModal);
+wireModalClose(accountModal);
+
+function openAccountModal(focusField) {
+  if (accountName) accountName.value = getAccountValue(STORAGE_KEYS.userName);
+  if (accountEmail) accountEmail.value = getAccountValue(STORAGE_KEYS.userEmail);
+  if (accountPayment) accountPayment.value = getAccountValue(STORAGE_KEYS.paymentMethod);
+  if (accountSubscription) accountSubscription.value = getAccountValue(STORAGE_KEYS.subscription) || "starter";
+
+  closeAllModals();
+  setModalOpen(accountModal, true);
+
+  const fieldMap = {
+    name: accountName,
+    email: accountEmail,
+    payment: accountPayment,
+    subscription: accountSubscription
+  };
+  const field = fieldMap[focusField] || accountName;
+  if (field && field.focus) {
+    requestAnimationFrame(() => field.focus());
+  }
+}
 
 function sendTypedToAnna(rawText) {
   const lower = String(rawText || "").trim().toLowerCase();
@@ -393,14 +455,25 @@ settingsRename?.addEventListener("click", () => {
   startupNameButton?.click();
 });
 
-clearTranscript?.addEventListener("click", () => {
-  transcriptEntries = [];
-  interimText = "";
-  renderTranscript();
-});
+editUserName?.addEventListener("click", () => openAccountModal("name"));
+editUserEmail?.addEventListener("click", () => openAccountModal("email"));
+editPayment?.addEventListener("click", () => openAccountModal("payment"));
+editSubscription?.addEventListener("click", () => openAccountModal("subscription"));
 
-clearConversation?.addEventListener("click", () => {
-  conversation = [];
+accountSave?.addEventListener("click", () => {
+  const nextName = String(accountName?.value || "").trim();
+  const nextEmail = String(accountEmail?.value || "").trim();
+  const nextPayment = String(accountPayment?.value || "").trim();
+  const nextSub = String(accountSubscription?.value || "starter").trim();
+
+  localStorage.setItem(STORAGE_KEYS.userName, nextName);
+  localStorage.setItem(STORAGE_KEYS.userEmail, nextEmail);
+  localStorage.setItem(STORAGE_KEYS.paymentMethod, nextPayment);
+  localStorage.setItem(STORAGE_KEYS.subscription, nextSub || "starter");
+
+  renderStartupName();
+  setModalOpen(accountModal, false);
+  setModalOpen(settingsModal, true);
 });
 
   textInputSend?.addEventListener("click", () => {

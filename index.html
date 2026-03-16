@@ -99,7 +99,7 @@
           <div class="modal-panel" role="dialog" aria-label="settings">
             <div class="modal-header">
               <h2>settings</h2>
-              <p>quick controls for this prototype</p>
+              <p>manage your account</p>
             </div>
 
             <div class="settings-list" role="list">
@@ -113,23 +113,78 @@
 
               <div class="settings-row" role="listitem">
                 <div>
-                  <div class="settings-title">transcript</div>
-                  <div class="settings-subtitle">clears on-device only</div>
+                  <div class="settings-title">your name</div>
+                  <div class="settings-subtitle" id="settingsUserName">not set</div>
                 </div>
-                <button type="button" class="glass-button" id="clearTranscript">clear</button>
+                <button type="button" class="glass-button" id="editUserName">edit</button>
               </div>
 
               <div class="settings-row" role="listitem">
                 <div>
-                  <div class="settings-title">conversation</div>
-                  <div class="settings-subtitle">resets what anna sees next</div>
+                  <div class="settings-title">email</div>
+                  <div class="settings-subtitle" id="settingsUserEmail">not set</div>
                 </div>
-                <button type="button" class="glass-button" id="clearConversation">reset</button>
+                <button type="button" class="glass-button" id="editUserEmail">edit</button>
+              </div>
+
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">payment method</div>
+                  <div class="settings-subtitle" id="settingsPayment">not set</div>
+                </div>
+                <button type="button" class="glass-button" id="editPayment">edit</button>
+              </div>
+
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">subscription</div>
+                  <div class="settings-subtitle" id="settingsSubscription">starter</div>
+                </div>
+                <button type="button" class="glass-button" id="editSubscription">edit</button>
               </div>
             </div>
 
             <div class="modal-actions">
               <button type="button" class="glass-button primary" data-modal-close>done</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="accountModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="account details">
+            <div class="modal-header">
+              <h2>account</h2>
+              <p>update your details</p>
+            </div>
+
+            <label class="field">
+              <span class="field-label">your name</span>
+              <input id="accountName" type="text" inputmode="text" autocomplete="name" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">email</span>
+              <input id="accountEmail" type="email" inputmode="email" autocomplete="email" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">payment method</span>
+              <input id="accountPayment" type="text" inputmode="text" autocomplete="cc-number" placeholder="visa •••• 1234" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">subscription</span>
+              <select id="accountSubscription" class="field-select">
+                <option value="starter">starter</option>
+                <option value="pro">pro</option>
+                <option value="team">team</option>
+              </select>
+            </label>
+
+            <div class="modal-actions">
+              <button type="button" class="glass-button" data-modal-close>cancel</button>
+              <button type="button" class="glass-button primary" id="accountSave">save</button>
             </div>
           </div>
         </section>
