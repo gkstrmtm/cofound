@@ -179,6 +179,19 @@ def post_binary(url: str, headers: dict[str, str], body: dict) -> tuple[int, byt
         return exc.code, exc.read()
 
 
+def build_elevenlabs_tts_body(text: str) -> dict:
+    return {
+        "text": text,
+        "model_id": get_elevenlabs_model(),
+        "voice_settings": {
+            "stability": 0.42,
+            "similarity_boost": 0.78,
+            "style": 0.12,
+            "use_speaker_boost": True,
+        },
+    }
+
+
 def request_json(url: str, headers: dict[str, str], method: str = "GET", body=None) -> tuple[int, object]:
     payload = None if body is None else json.dumps(body).encode("utf-8")
     req = urlrequest.Request(url, data=payload, headers=headers, method=method)
@@ -501,17 +514,21 @@ def tts():
                 "Content-Type": "application/json",
                 "accept": "audio/mpeg",
             },
-            {
-                "text": text,
-                "model_id": get_elevenlabs_model(),
-                "voice_settings": {
-                    "stability": 0.42,
-                    "similarity_boost": 0.78,
-                    "style": 0.12,
-                    "use_speaker_boost": True,
-                },
-            },
+            build_elevenlabs_tts_body(text),
         )
+
+        if status >= 400 and requested_voice:
+            fallback_voice_id = get_or_cache_elevenlabs_voice_id(api_key)
+            if fallback_voice_id and fallback_voice_id != voice_id:
+                status, audio = post_binary(
+                    f"https://api.elevenlabs.io/v1/text-to-speech/{fallback_voice_id}/stream",
+                    {
+                        "xi-api-key": api_key,
+                        "Content-Type": "application/json",
+                        "accept": "audio/mpeg",
+                    },
+                    build_elevenlabs_tts_body(text),
+                )
     except Exception as exc:
         return jsonify({"error": "elevenlabs request failed", "detail": str(exc)}), 500
 

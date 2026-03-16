@@ -15,6 +15,30 @@ let cachedVoiceId = null;
 
 const { getElevenLabsKey } = require("./_elevenlabs");
 
+async function requestTtsAudio(apiKey, voiceId, text, modelId) {
+  return fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream`,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        accept: "audio/mpeg"
+      },
+      body: JSON.stringify({
+        text,
+        model_id: modelId,
+        voice_settings: {
+          stability: 0.42,
+          similarity_boost: 0.78,
+          style: 0.12,
+          use_speaker_boost: true
+        }
+      })
+    }
+  );
+}
+
 async function getVoiceId(apiKey) {
   const envVoiceId = (process.env.ELEVENLABS_VOICE_ID || "").trim();
   if (envVoiceId) {
@@ -84,29 +108,15 @@ module.exports = async (req, res) => {
   const modelId = (process.env.ELEVENLABS_MODEL || "eleven_turbo_v2_5").trim();
 
   try {
-    const voiceId = voiceOverride || (await getVoiceId(apiKey));
+    const primaryVoiceId = voiceOverride || (await getVoiceId(apiKey));
+    let elevenRes = await requestTtsAudio(apiKey, primaryVoiceId, text, modelId);
 
-    const elevenRes = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": apiKey,
-          "Content-Type": "application/json",
-          accept: "audio/mpeg"
-        },
-        body: JSON.stringify({
-          text,
-          model_id: modelId,
-          voice_settings: {
-            stability: 0.42,
-            similarity_boost: 0.78,
-            style: 0.12,
-            use_speaker_boost: true
-          }
-        })
+    if (!elevenRes.ok && voiceOverride) {
+      const fallbackVoiceId = await getVoiceId(apiKey);
+      if (fallbackVoiceId && fallbackVoiceId !== primaryVoiceId) {
+        elevenRes = await requestTtsAudio(apiKey, fallbackVoiceId, text, modelId);
       }
-    );
+    }
 
     if (!elevenRes.ok) {
       const data = await elevenRes.json().catch(() => null);

@@ -1926,6 +1926,19 @@ function unlockAudioFromGesture() {
   playNextTts();
 }
 
+function primeAudioUnlockOnFirstGesture() {
+  const once = () => {
+    unlockAudioFromGesture();
+    document.removeEventListener("pointerdown", once, true);
+    document.removeEventListener("touchstart", once, true);
+    document.removeEventListener("click", once, true);
+  };
+
+  document.addEventListener("pointerdown", once, true);
+  document.addEventListener("touchstart", once, true);
+  document.addEventListener("click", once, true);
+}
+
 function getVoiceRepliesEnabled() {
   return (localStorage.getItem(STORAGE_KEYS.voiceReplies) || "true") === "true";
 }
@@ -2124,6 +2137,7 @@ function playNextTts() {
 
   audio.play().catch(() => {
     // Likely autoplay policy. Keep this chunk and retry after unlock.
+    console.warn("anna tts play() was blocked; waiting for next user gesture to retry audio");
     ttsNeedsUnlock = true;
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
@@ -3025,6 +3039,9 @@ function toggleListeningFromTap(event) {
 
 // single source of truth for tap handling (prevents double-fire)
 if (recordButton) {
+  recordButton.addEventListener("pointerdown", () => {
+    unlockAudioFromGesture();
+  });
   if ("PointerEvent" in window) {
     recordButton.addEventListener("pointerup", toggleListeningFromTap);
   }
@@ -3552,6 +3569,7 @@ accountSave?.addEventListener("click", () => {
 
 initBrandLogoImages();
 syncTaskContextFromUrl();
+primeAudioUnlockOnFirstGesture();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();
