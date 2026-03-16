@@ -51,6 +51,18 @@ def get_api_key() -> Optional[str]:
     return key
 
 
+def get_supabase_public_key() -> tuple[Optional[str], bool]:
+    candidates = [
+        (os.environ.get("SUPABASE_ANON_KEY") or "").strip(),
+        (os.environ.get("SUPABASE_PUBLISHABLE_KEY") or "").strip(),
+        (os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY") or "").strip(),
+        (os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or "").strip(),
+    ]
+    key = next((value for value in candidates if value), "")
+    looks_secret = key.lower().startswith("sb_secret_") or "service_role" in key.lower() or "service-role" in key.lower()
+    return ((None if looks_secret or not key else key), looks_secret)
+
+
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -64,6 +76,7 @@ def static_proxy(path: str):
 @app.get("/api/health")
 def health():
     key, status = get_api_key_status()
+    supabase_public_key, supabase_looks_secret = get_supabase_public_key()
     return jsonify(
         {
             "ok": True,
@@ -71,8 +84,12 @@ def health():
             "openai_key_status": status,
             "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
             "has_supabase": bool(
-                (os.environ.get("SUPABASE_URL") or "").strip()
-                and (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+                (os.environ.get("SUPABASE_URL") or "").strip() and supabase_public_key
+            ),
+            "supabase_key_error": (
+                "supabase secret key cannot be used in the browser; use the anon public key"
+                if supabase_looks_secret
+                else None
             ),
         }
     )
@@ -80,14 +97,19 @@ def health():
 
 @app.get("/api/public-config")
 def public_config():
+    supabase_public_key, supabase_looks_secret = get_supabase_public_key()
     return jsonify(
         {
             "ok": True,
             "supabaseUrl": (os.environ.get("SUPABASE_URL") or "").strip(),
-            "supabaseAnonKey": (os.environ.get("SUPABASE_ANON_KEY") or "").strip(),
+            "supabaseAnonKey": supabase_public_key or "",
             "hasSupabase": bool(
-                (os.environ.get("SUPABASE_URL") or "").strip()
-                and (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+                (os.environ.get("SUPABASE_URL") or "").strip() and supabase_public_key
+            ),
+            "supabaseKeyError": (
+                "supabase secret key cannot be used in the browser; use the anon public key"
+                if supabase_looks_secret
+                else None
             ),
         }
     )
