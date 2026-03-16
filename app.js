@@ -119,6 +119,7 @@ let ttsQueue = [];
 let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
+let ttsAudioEl = null;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
 let audioCtx = null;
@@ -679,6 +680,39 @@ function updateTypeComposerKeyboardOffset() {
 const SILENT_WAV_DATA_URI =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 
+function ensureTtsAudioElement() {
+  if (ttsAudioEl) {
+    return ttsAudioEl;
+  }
+  const audio = document.createElement("audio");
+  audio.preload = "auto";
+  audio.playsInline = true;
+  audio.setAttribute("playsinline", "");
+  audio.setAttribute("webkit-playsinline", "");
+  audio.setAttribute("aria-hidden", "true");
+  audio.style.position = "fixed";
+  audio.style.width = "1px";
+  audio.style.height = "1px";
+  audio.style.opacity = "0";
+  audio.style.pointerEvents = "none";
+  audio.style.left = "-9999px";
+  audio.volume = getOutputVolume();
+  (document.body || document.documentElement).appendChild(audio);
+  ttsAudioEl = audio;
+  return audio;
+}
+
+async function routeTtsAudioToSystemOutput(audio) {
+  if (!audio || typeof audio.setSinkId !== "function") {
+    return;
+  }
+  try {
+    await audio.setSinkId("default");
+  } catch {
+    // ignore unsupported or blocked sink changes
+  }
+}
+
 function unlockAudioFromGesture() {
   if (audioUnlockAttempted && !ttsNeedsUnlock) {
     return;
@@ -698,7 +732,12 @@ function unlockAudioFromGesture() {
 
   // HTMLAudio unlock (also helps on mobile)
   try {
-    const a = new Audio(SILENT_WAV_DATA_URI);
+    const a = ensureTtsAudioElement();
+    const previousSrc = a.currentSrc || a.src || "";
+    const previousVolume = a.volume;
+    routeTtsAudioToSystemOutput(a);
+    a.src = SILENT_WAV_DATA_URI;
+    a.load();
     a.volume = 0;
     const p = a.play();
     if (p && p.catch) {
@@ -709,7 +748,12 @@ function unlockAudioFromGesture() {
     setTimeout(() => {
       try {
         a.pause();
-        a.src = "";
+        a.removeAttribute("src");
+        a.load();
+        a.volume = previousVolume;
+        if (previousSrc) {
+          a.src = previousSrc;
+        }
       } catch {
         // ignore
       }
@@ -836,7 +880,8 @@ function stopAllTts() {
   if (ttsCurrentAudio) {
     try {
       ttsCurrentAudio.pause();
-      ttsCurrentAudio.src = "";
+      ttsCurrentAudio.removeAttribute("src");
+      ttsCurrentAudio.load?.();
     } catch {
       // ignore
     }
@@ -876,7 +921,11 @@ function playNextTts() {
 
   ttsIsPlaying = true;
   ttsCurrentUrl = url;
-  const audio = new Audio(url);
+  const audio = ensureTtsAudioElement();
+  routeTtsAudioToSystemOutput(audio);
+  audio.pause();
+  audio.src = url;
+  audio.load();
   audio.volume = getOutputVolume();
   ttsCurrentAudio = audio;
 
