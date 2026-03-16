@@ -2235,6 +2235,7 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
   }
 
   const mySession = ttsSessionId;
+  ttsFetchInFlight += 1;
 
   // Serialize fetches so audio enqueues in the same order as text segments.
   ttsFetchChain = ttsFetchChain
@@ -2242,8 +2243,6 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       if (mySession !== ttsSessionId) {
         return;
       }
-
-      ttsFetchInFlight += 1;
 
       if (!voiceIdOverride && !getSelectedVoiceId()) {
         await ensureDefaultVoiceSelection();
@@ -3278,6 +3277,12 @@ chooseVoice?.addEventListener("click", () => {
 function setModalOpen(modal, isOpen) {
   if (!modal) {
     return;
+  }
+  if (!isOpen) {
+    const active = document.activeElement;
+    if (active && modal.contains(active) && typeof active.blur === "function") {
+      active.blur();
+    }
   }
   modal.classList.toggle("open", isOpen);
   modal.setAttribute("aria-hidden", String(!isOpen));
