@@ -8,11 +8,23 @@ const promptTryText = document.getElementById("promptTryText");
 
 const startupTitle = document.getElementById("startupTitle");
 const startupPageLink = document.getElementById("startupPageLink");
+const taskContextBanner = document.getElementById("taskContextBanner");
+const taskContextText = document.getElementById("taskContextText");
+const taskContextBackLink = document.getElementById("taskContextBackLink");
 
 const startupNameText = document.getElementById("startupNameText");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const projectsLeftEl = document.getElementById("projectsLeft");
 const startupTasksEl = document.getElementById("startupTasks");
+
+const taskStage = document.getElementById("taskStage");
+const taskPageTitle = document.getElementById("taskPageTitle");
+const taskPageStatus = document.getElementById("taskPageStatus");
+const taskDoneToggle = document.getElementById("taskDoneToggle");
+const taskNotesInput = document.getElementById("taskNotesInput");
+const taskTalkButton = document.getElementById("taskTalkButton");
+const taskBackLink = document.getElementById("taskBackLink");
+const taskRelatedList = document.getElementById("taskRelatedList");
 
 const listSheet = document.getElementById("listSheet");
 const listSheetScrim = document.getElementById("listSheetScrim");
@@ -98,7 +110,9 @@ const STORAGE_KEYS = {
   authUsers: "anna:authUsers",
   authUser: "anna:authUser",
   memoryLog: "anna:memoryLog",
-  startupLists: "anna:startupLists"
+  startupLists: "anna:startupLists",
+  taskState: "anna:taskState",
+  activeTask: "anna:activeTask"
 };
 
 let transcriptEntries = [];
@@ -315,6 +329,162 @@ function getCurrentUserId() {
   return user ? user.email : "anonymous";
 }
 
+function normalizeTaskTitle(raw) {
+  return String(raw || "").trim().toLowerCase();
+}
+
+function makeTaskKey(raw) {
+  const normalized = normalizeTaskTitle(raw)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return normalized || "task";
+}
+
+function buildTaskHref(title) {
+  const normalized = normalizeTaskTitle(title);
+  return normalized ? `task.html?task=${encodeURIComponent(normalized)}` : "task.html";
+}
+
+function buildTalkHref(title) {
+  const normalized = normalizeTaskTitle(title);
+  return normalized ? `index.html?task=${encodeURIComponent(normalized)}` : "index.html";
+}
+
+function readTaskStateStore() {
+  const store = readJson(STORAGE_KEYS.taskState, {});
+  return store && typeof store === "object" ? store : {};
+}
+
+function writeTaskStateStore(store) {
+  writeJson(STORAGE_KEYS.taskState, store && typeof store === "object" ? store : {});
+}
+
+function getTaskStateMap(userId = getCurrentUserId()) {
+  const store = readTaskStateStore();
+  const map = store && typeof store[userId] === "object" ? store[userId] : {};
+  return map && typeof map === "object" ? map : {};
+}
+
+function readTaskEntry(title, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(title);
+  const key = makeTaskKey(normalized);
+  const map = getTaskStateMap(userId);
+  const entry = map[key] && typeof map[key] === "object" ? map[key] : {};
+  return {
+    key,
+    title: normalized,
+    completed: Boolean(entry.completed),
+    notes: String(entry.notes || ""),
+    updatedAt: Number(entry.updatedAt || 0) || 0
+  };
+}
+
+function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(title);
+  if (!normalized) {
+    return readTaskEntry(title, userId);
+  }
+
+  const key = makeTaskKey(normalized);
+  const store = readTaskStateStore();
+  const userMap = store && typeof store[userId] === "object" ? store[userId] : {};
+  const current = readTaskEntry(normalized, userId);
+  const nextValue = typeof updater === "function" ? updater(current) : updater;
+  const nextEntry = {
+    title: normalized,
+    completed: Boolean(nextValue?.completed),
+    notes: String(nextValue?.notes || ""),
+    updatedAt: Date.now()
+  };
+
+  store[userId] = {
+    ...userMap,
+    [key]: nextEntry
+  };
+  writeTaskStateStore(store);
+  return { key, ...nextEntry };
+}
+
+function toggleTaskCompleted(title, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => ({ ...current, completed: !current.completed }),
+    userId
+  );
+}
+
+function setTaskNotes(title, notes, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => ({ ...current, notes: String(notes || "") }),
+    userId
+  );
+}
+
+function getLatestStartupListForUser(userId = getCurrentUserId()) {
+  const lists = readStartupLists().filter((l) => String(l?.userId || "") === userId);
+  return lists.length ? lists[lists.length - 1] : null;
+}
+
+function getLatestStartupItems(userId = getCurrentUserId()) {
+  const latest = getLatestStartupListForUser(userId);
+  return latest && Array.isArray(latest.items) ? latest.items : [];
+}
+
+function readActiveTaskContext() {
+  const data = readJson(STORAGE_KEYS.activeTask, null);
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+  const currentUserId = getCurrentUserId();
+  const title = normalizeTaskTitle(data.title);
+  const userId = String(data.userId || "");
+  if (!title || userId !== currentUserId) {
+    return null;
+  }
+  return {
+    title,
+    userId,
+    href: buildTaskHref(title),
+    talkHref: buildTalkHref(title),
+    updatedAt: Number(data.updatedAt || 0) || 0
+  };
+}
+
+function setActiveTaskContext(title) {
+  const normalized = normalizeTaskTitle(title);
+  if (!normalized) {
+    localStorage.removeItem(STORAGE_KEYS.activeTask);
+    return null;
+  }
+  const context = {
+    title: normalized,
+    userId: getCurrentUserId(),
+    updatedAt: Date.now()
+  };
+  writeJson(STORAGE_KEYS.activeTask, context);
+  return { ...context, href: buildTaskHref(normalized), talkHref: buildTalkHref(normalized) };
+}
+
+function syncTaskContextFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const task = normalizeTaskTitle(params.get("task"));
+  if (!task) {
+    return readActiveTaskContext();
+  }
+  return setActiveTaskContext(task);
+}
+
+function getCurrentTaskTitle() {
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = normalizeTaskTitle(params.get("task"));
+  if (fromUrl) {
+    return fromUrl;
+  }
+  return readActiveTaskContext()?.title || "";
+}
+
 function readMemoryLog() {
   const log = readJson(STORAGE_KEYS.memoryLog, []);
   return Array.isArray(log) ? log : [];
@@ -355,6 +525,7 @@ function buildMessagesForApi() {
   const user = getAuthUser();
   const log = readMemoryLog();
   const currentUserId = getCurrentUserId();
+  const activeTask = readActiveTaskContext();
 
   const now = Date.now();
   const older = [];
@@ -382,6 +553,9 @@ function buildMessagesForApi() {
   if (user?.email) {
     sysParts.push(`signed in as: ${user.email}`);
   }
+  if (activeTask?.title) {
+    sysParts.push(`active task the user is working on: ${activeTask.title}`);
+  }
   if (memoryLines) {
     sysParts.push("memory (older context):\n" + memoryLines);
   }
@@ -407,6 +581,23 @@ function setListSheetOpen(isOpen) {
   }
   listSheet.classList.toggle("open", isOpen);
   listSheet.setAttribute("aria-hidden", String(!isOpen));
+}
+
+function renderTaskContextBanner() {
+  if (!taskContextBanner || !taskContextText) {
+    return;
+  }
+  const activeTask = readActiveTaskContext();
+  const isOpen = Boolean(activeTask?.title);
+  taskContextBanner.classList.toggle("hidden", !isOpen);
+  taskContextBanner.setAttribute("aria-hidden", String(!isOpen));
+  if (!isOpen) {
+    return;
+  }
+  taskContextText.textContent = activeTask.title;
+  if (taskContextBackLink) {
+    taskContextBackLink.href = activeTask.href;
+  }
 }
 
 function escapeText(text) {
@@ -444,6 +635,86 @@ function extractListFromText(text) {
   return null;
 }
 
+function isProbablyUrl(text) {
+  return /^https?:\/\//i.test(String(text || "").trim());
+}
+
+function createTaskCheckButton(title, className, onToggle) {
+  const state = readTaskEntry(title);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${className}${state.completed ? " is-complete" : ""}`;
+  button.setAttribute(
+    "aria-label",
+    state.completed ? "mark task incomplete" : "mark task complete"
+  );
+  button.textContent = state.completed ? "✓" : "";
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleTaskCompleted(title);
+    renderStartupDashboard();
+    renderTaskWorkspace();
+    renderTaskContextBanner();
+    if (typeof onToggle === "function") {
+      onToggle();
+    }
+  });
+  return button;
+}
+
+function createTaskLink(title, className) {
+  const link = document.createElement("a");
+  link.href = buildTaskHref(title);
+  link.className = className;
+  link.textContent = normalizeTaskTitle(title);
+  link.addEventListener("click", () => {
+    setActiveTaskContext(title);
+  });
+  return link;
+}
+
+function renderSheetList(extracted) {
+  if (!listSheetBody) {
+    return;
+  }
+  listSheetBody.innerHTML = "";
+
+  const list = document.createElement("div");
+  list.className = "sheet-list";
+
+  extracted.items.slice(0, 12).forEach((itemText) => {
+    const text = String(itemText || "").trim().toLowerCase();
+    if (!text) {
+      return;
+    }
+
+    if (String(extracted.title || "") === "resources" && isProbablyUrl(text)) {
+      const link = document.createElement("a");
+      link.href = text;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      link.className = "sheet-item sheet-item-link";
+      link.textContent = text;
+      list.appendChild(link);
+      return;
+    }
+
+    const row = document.createElement("div");
+    const state = readTaskEntry(text);
+    row.className = `sheet-task-row${state.completed ? " is-complete" : ""}`;
+
+    const link = createTaskLink(text, "sheet-item sheet-item-task");
+    const check = createTaskCheckButton(text, "sheet-item-check", () => renderSheetList(extracted));
+
+    row.appendChild(link);
+    row.appendChild(check);
+    list.appendChild(row);
+  });
+
+  listSheetBody.appendChild(list);
+}
+
 function maybeShowListSheetFromAnna(text) {
   if (!listSheetBody || !listSheetTitle) {
     return;
@@ -454,11 +725,7 @@ function maybeShowListSheetFromAnna(text) {
   }
 
   listSheetTitle.textContent = extracted.title;
-  const html = extracted.items
-    .slice(0, 12)
-    .map((it) => `<div class="sheet-item">${escapeText(it)}</div>`)
-    .join("");
-  listSheetBody.innerHTML = `<div class="sheet-list">${html}</div>`;
+  renderSheetList(extracted);
   setListSheetOpen(true);
 
   persistStartupList(extracted);
@@ -502,8 +769,7 @@ function renderStartupDashboard() {
   }
 
   const userId = getCurrentUserId();
-  const lists = readStartupLists().filter((l) => String(l?.userId || "") === userId);
-  const latest = lists.length ? lists[lists.length - 1] : null;
+  const latest = getLatestStartupListForUser(userId);
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
 
   if (projectsLeftEl) {
@@ -533,21 +799,111 @@ function renderStartupDashboard() {
     const title = String(titleText || "").trim();
     if (!title) return;
 
+    const state = readTaskEntry(title, userId);
+
     const row = document.createElement("div");
-    row.className = "startup-task";
+    row.className = `startup-task${state.completed ? " is-complete" : ""}`;
 
-    const a = document.createElement("a");
-    a.href = "#";
-    a.className = "startup-task-title";
-    a.textContent = title;
-    a.addEventListener("click", (e) => e.preventDefault());
+    const a = createTaskLink(title, "startup-task-title");
 
-    const check = document.createElement("div");
-    check.className = "startup-task-check";
+    const check = createTaskCheckButton(title, "startup-task-check", () => renderStartupDashboard());
     row.appendChild(a);
     row.appendChild(check);
     startupTasksEl.appendChild(row);
   });
+}
+
+function renderTaskRelatedList(currentTitle) {
+  if (!taskRelatedList) {
+    return;
+  }
+  const items = getLatestStartupItems();
+  taskRelatedList.innerHTML = "";
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "startup-empty";
+    empty.textContent = "no startup tasks yet. ask anna for a to do list first.";
+    taskRelatedList.appendChild(empty);
+    return;
+  }
+
+  items.slice(0, 18).forEach((taskTitle) => {
+    const normalized = normalizeTaskTitle(taskTitle);
+    const state = readTaskEntry(normalized);
+
+    const row = document.createElement("div");
+    row.className = `task-related-item${normalized === currentTitle ? " is-active" : ""}${state.completed ? " is-complete" : ""}`;
+
+    const link = createTaskLink(normalized, "task-related-link");
+    const check = createTaskCheckButton(normalized, "task-related-check", () => {
+      renderTaskRelatedList(currentTitle);
+      renderTaskWorkspace();
+    });
+
+    row.appendChild(link);
+    row.appendChild(check);
+    taskRelatedList.appendChild(row);
+  });
+}
+
+function renderTaskWorkspace() {
+  if (!taskStage && !taskPageTitle && !taskNotesInput) {
+    return;
+  }
+
+  const title = getCurrentTaskTitle() || normalizeTaskTitle(getLatestStartupItems()[0]);
+  if (!title) {
+    if (taskPageTitle) {
+      taskPageTitle.textContent = "no task selected";
+    }
+    if (taskPageStatus) {
+      taskPageStatus.textContent = "ask anna for a to do list first";
+    }
+    if (taskNotesInput) {
+      taskNotesInput.value = "";
+      taskNotesInput.disabled = true;
+    }
+    if (taskDoneToggle) {
+      taskDoneToggle.disabled = true;
+      taskDoneToggle.textContent = "no task yet";
+    }
+    renderTaskRelatedList("");
+    return;
+  }
+
+  setActiveTaskContext(title);
+  const state = readTaskEntry(title);
+
+  if (taskPageTitle) {
+    taskPageTitle.textContent = title;
+  }
+  if (taskPageStatus) {
+    taskPageStatus.textContent = state.completed ? "done" : "in progress";
+  }
+  if (taskDoneToggle) {
+    taskDoneToggle.disabled = false;
+    taskDoneToggle.classList.toggle("is-complete", state.completed);
+    taskDoneToggle.textContent = state.completed ? "✓ done" : "mark done";
+    taskDoneToggle.setAttribute(
+      "aria-label",
+      state.completed ? "mark task incomplete" : "mark task complete"
+    );
+  }
+  if (taskNotesInput) {
+    taskNotesInput.disabled = false;
+    if (document.activeElement !== taskNotesInput) {
+      taskNotesInput.value = state.notes;
+    }
+  }
+  if (taskTalkButton) {
+    taskTalkButton.href = buildTalkHref(title);
+  }
+  if (taskBackLink) {
+    taskBackLink.href = "startup.html";
+  }
+
+  renderTaskRelatedList(title);
 }
 
 function clamp01(value) {
@@ -1909,6 +2265,34 @@ startupPageLink?.addEventListener("click", () => {
   setMenuOpen(false);
 });
 
+taskTalkButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  setActiveTaskContext(title);
+  taskTalkButton.href = buildTalkHref(title);
+});
+
+taskDoneToggle?.addEventListener("click", (event) => {
+  event.preventDefault();
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  toggleTaskCompleted(title);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskNotesInput?.addEventListener("input", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  setTaskNotes(title, taskNotesInput.value);
+});
+
 // startup dashboard is driven by real lists captured from anna replies.
 
 voiceRepliesToggle?.addEventListener("change", () => {
@@ -2170,11 +2554,14 @@ accountSave?.addEventListener("click", () => {
 
 initBrandLogoImages();
 syncAuthIntoProfileFields();
+syncTaskContextFromUrl();
 renderStartupName();
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();
 renderVoiceRepliesSettingUi();
+renderTaskContextBanner();
 randomizeTryPrompt();
 renderStartupDashboard();
+renderTaskWorkspace();
 ensureDefaultVoiceSelection();
