@@ -24,12 +24,12 @@ to test `/api/*` locally, either deploy to vercel preview or use `vercel dev` if
 
 ## files
 
-- `index.html` — ui
-- `styles.css` — styling
-- `app.js` — mic transcript + calls `/api/chat`
-- `api/health.js` — env check
-- `api/chat.js` — openai call (reads env vars)
+- `index.html` - ui
+- `styles.css` - styling
+- `app.js` - mic transcript + calls `/api/chat`
+- `api/health.js` - env check
+- `api/chat.js` - openai call (reads env vars)
 
 (optional legacy local server)
 
-- `server.py` — flask version of the api for python-only local runs
+- `server.py` - flask version of the api for python-only local runs

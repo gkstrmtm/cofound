@@ -6,6 +6,20 @@ const appFrame = document.querySelector(".app-frame");
 const typeInstead = document.getElementById("typeInstead");
 const promptTryText = document.getElementById("promptTryText");
 
+const startupTitle = document.getElementById("startupTitle");
+const startupPageLink = document.getElementById("startupPageLink");
+
+const startupNameText = document.getElementById("startupNameText");
+const daysToLaunchEl = document.getElementById("daysToLaunch");
+const projectsLeftEl = document.getElementById("projectsLeft");
+const startupTasksEl = document.getElementById("startupTasks");
+
+const listSheet = document.getElementById("listSheet");
+const listSheetScrim = document.getElementById("listSheetScrim");
+const listSheetClose = document.getElementById("listSheetClose");
+const listSheetTitle = document.getElementById("listSheetTitle");
+const listSheetBody = document.getElementById("listSheetBody");
+
 const typeComposer = document.getElementById("typeComposer");
 const typeComposerInput = document.getElementById("typeComposerInput");
 const typeComposerSend = document.getElementById("typeComposerSend");
@@ -14,6 +28,8 @@ const volumeWrap = document.getElementById("volumeWrap");
 const volumeButton = document.getElementById("volumeButton");
 const volumePanel = document.getElementById("volumePanel");
 const volumeSlider = document.getElementById("volumeSlider");
+const volumeThumb = document.getElementById("volumeThumb");
+const volumeFill = document.getElementById("volumeFill");
 
 const menuButton = document.getElementById("menuButton");
 const menuDrawer = document.getElementById("menuDrawer");
@@ -86,6 +102,8 @@ let audioUnlockAttempted = false;
 let audioCtx = null;
 let ttsFetchChain = Promise.resolve();
 
+let isAdjustingVolume = false;
+
 function ensureStartedUi() {
   if (!appFrame || !transcriptPane) {
     return;
@@ -95,6 +113,67 @@ function ensureStartedUi() {
     appFrame.classList.add("has-started");
   }
   transcriptPane.classList.remove("hidden");
+}
+
+function setListSheetOpen(isOpen) {
+  if (!listSheet) {
+    return;
+  }
+  listSheet.classList.toggle("open", isOpen);
+  listSheet.setAttribute("aria-hidden", String(!isOpen));
+}
+
+function escapeText(text) {
+  const s = String(text ?? "");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function extractListFromText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lines = raw.split(/\r?\n/).map((l) => l.trim());
+  const items = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const bullet = line.match(/^[-*•]\s+(.*)$/);
+    const numbered = line.match(/^\d+[.)]\s+(.*)$/);
+    const content = (bullet && bullet[1]) || (numbered && numbered[1]);
+    if (content && content.trim()) {
+      items.push(content.trim());
+    }
+  }
+  if (items.length >= 2) {
+    return { title: "to do", items };
+  }
+
+  // fallback: detect multiple links
+  const urls = raw.match(/https?:\/\/[^\s)\]]+/g) || [];
+  if (urls.length >= 2) {
+    return { title: "resources", items: urls.slice(0, 12) };
+  }
+
+  return null;
+}
+
+function maybeShowListSheetFromAnna(text) {
+  if (!listSheetBody || !listSheetTitle) {
+    return;
+  }
+  const extracted = extractListFromText(text);
+  if (!extracted) {
+    return;
+  }
+
+  listSheetTitle.textContent = extracted.title;
+  const html = extracted.items
+    .slice(0, 12)
+    .map((it) => `<div class="sheet-item">${escapeText(it)}</div>`)
+    .join("");
+  listSheetBody.innerHTML = `<div class="sheet-list">${html}</div>`;
+  setListSheetOpen(true);
 }
 
 function clamp01(value) {
@@ -138,9 +217,33 @@ function setVolumePanelOpen(isOpen) {
 }
 
 function renderVolumeUi() {
+  const vol01 = getStoredVolume();
+  const vol100 = Math.round(vol01 * 100);
+
   if (volumeSlider) {
-    volumeSlider.value = String(Math.round(getStoredVolume() * 100));
+    volumeSlider.setAttribute("aria-valuenow", String(vol100));
   }
+
+  if (volumeThumb && volumeSlider) {
+    const rect = volumeSlider.getBoundingClientRect();
+    const thumbH = 22;
+    const topPx = (1 - vol01) * Math.max(1, rect.height - thumbH);
+    volumeThumb.style.top = `${topPx}px`;
+  }
+
+  if (volumeFill) {
+    volumeFill.style.height = `${Math.max(0, Math.min(100, vol100))}%`;
+  }
+}
+
+function setVolumeFromClientY(clientY) {
+  if (!volumeSlider) {
+    return;
+  }
+  const rect = volumeSlider.getBoundingClientRect();
+  const y = Math.max(rect.top, Math.min(rect.bottom, clientY));
+  const vol01 = clamp01(1 - (y - rect.top) / Math.max(1, rect.height));
+  setStoredVolume(vol01);
 }
 
 function setTypeComposerOpen(isOpen) {
@@ -675,6 +778,7 @@ async function startStreamingAnnaReply(pendingId) {
 
   const cleanedFinal = String(final || "").trim();
   resolvePendingAnna(pendingId, cleanedFinal);
+  maybeShowListSheetFromAnna(cleanedFinal);
 
   if (getVoiceRepliesEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
     const leftover = String(speakBuffer || "").trim();
@@ -685,6 +789,9 @@ async function startStreamingAnnaReply(pendingId) {
 
   return cleanedFinal;
 }
+
+listSheetScrim?.addEventListener("click", () => setListSheetOpen(false));
+listSheetClose?.addEventListener("click", () => setListSheetOpen(false));
 
 async function loadVoicesIntoModal() {
   if (!voiceStatus || !voiceList) {
@@ -752,7 +859,12 @@ async function loadVoicesIntoModal() {
       const play = document.createElement("button");
       play.type = "button";
       play.className = "voice-play";
-      play.textContent = "▶";
+      play.setAttribute("aria-label", "preview voice");
+      play.innerHTML = `
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M9 7.5v9l8-4.5-8-4.5Z"/>
+        </svg>
+      `;
       play.addEventListener("click", (e) => {
         e.preventDefault();
         unlockAudioFromGesture();
@@ -1001,18 +1113,71 @@ volumePanel?.addEventListener("pointerdown", (e) => {
   e.stopPropagation();
 });
 
-volumeSlider?.addEventListener("pointerdown", (e) => {
-  // prevent the global outside-click handler from closing while dragging
-  e.stopPropagation();
-});
-
-volumeSlider?.addEventListener("input", () => {
+function beginAdjustingVolume(e) {
+  if (!volumePanel || !volumePanel.classList.contains("open")) {
+    return;
+  }
   unlockAudioFromGesture();
-  const next = clamp01(Number(volumeSlider.value) / 100);
-  setStoredVolume(next);
+  isAdjustingVolume = true;
+  try {
+    e.preventDefault?.();
+  } catch {
+    // ignore
+  }
+  try {
+    e.stopPropagation?.();
+  } catch {
+    // ignore
+  }
+
+  const clientY =
+    e?.touches && e.touches[0] ? Number(e.touches[0].clientY) : Number(e?.clientY);
+  if (Number.isFinite(clientY)) {
+    setVolumeFromClientY(clientY);
+  }
+}
+
+function moveAdjustingVolume(e) {
+  if (!isAdjustingVolume) {
+    return;
+  }
+  const clientY =
+    e?.touches && e.touches[0] ? Number(e.touches[0].clientY) : Number(e?.clientY);
+  if (Number.isFinite(clientY)) {
+    setVolumeFromClientY(clientY);
+  }
+}
+
+function endAdjustingVolume() {
+  if (!isAdjustingVolume) {
+    return;
+  }
+  isAdjustingVolume = false;
+}
+
+volumeSlider?.addEventListener("pointerdown", beginAdjustingVolume);
+volumeSlider?.addEventListener("pointermove", moveAdjustingVolume);
+volumeSlider?.addEventListener("pointerup", endAdjustingVolume);
+volumeSlider?.addEventListener("pointercancel", endAdjustingVolume);
+volumeSlider?.addEventListener("touchstart", beginAdjustingVolume, { passive: false });
+volumeSlider?.addEventListener("touchmove", moveAdjustingVolume, { passive: false });
+volumeSlider?.addEventListener("touchend", endAdjustingVolume);
+
+volumeSlider?.addEventListener("keydown", (event) => {
+  const step = event.shiftKey ? 0.1 : 0.04;
+  if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+    event.preventDefault();
+    setStoredVolume(clamp01(getStoredVolume() + step));
+  } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+    event.preventDefault();
+    setStoredVolume(clamp01(getStoredVolume() - step));
+  }
 });
 
 document.addEventListener("pointerdown", (event) => {
+  if (isAdjustingVolume) {
+    return;
+  }
   // close inline composer if you tap away
   if (typeComposer && typeComposer.classList.contains("open")) {
     const target = event.target;
@@ -1118,7 +1283,15 @@ function renderStartupName() {
     return;
   }
   const name = getStartupName();
-  startupNameButton.textContent = name ? name : "name your startup";
+  if (startupNameButton) {
+    startupNameButton.textContent = name ? name : "name your startup";
+  }
+  if (startupTitle) {
+    startupTitle.textContent = name ? name : "your startup";
+  }
+  if (startupNameText) {
+    startupNameText.textContent = name ? name : "startup";
+  }
   if (settingsStartupName) {
     settingsStartupName.textContent = name ? name : "not set";
   }
@@ -1137,6 +1310,66 @@ function renderStartupName() {
     settingsProfile.textContent = parts.length ? parts.join(" • ") : "not set";
   }
   renderVoiceSetting();
+}
+
+startupTitle?.addEventListener("click", () => {
+  try {
+    window.location.href = "startup.html";
+  } catch {
+    // ignore
+  }
+});
+
+startupPageLink?.addEventListener("click", () => {
+  setMenuOpen(false);
+});
+
+async function loadStartupBenchmarks() {
+  if (!daysToLaunchEl || !projectsLeftEl || !startupTasksEl) {
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/benchmarks", { method: "GET" });
+    if (!res.ok) {
+      throw new Error(`http ${res.status}`);
+    }
+    const data = await res.json();
+    const days = Number(data?.days_to_launch);
+    const left = Number(data?.projects_left);
+    const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+
+    if (Number.isFinite(days)) {
+      daysToLaunchEl.textContent = String(days);
+    }
+    if (Number.isFinite(left)) {
+      projectsLeftEl.textContent = String(left);
+    }
+
+    startupTasksEl.innerHTML = "";
+    tasks.slice(0, 12).forEach((t) => {
+      const title = String(t?.title || "").trim();
+      if (!title) return;
+      const row = document.createElement("div");
+      row.className = "startup-task";
+
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "startup-task-title";
+      a.textContent = title;
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+      });
+
+      const check = document.createElement("div");
+      check.className = "startup-task-check";
+      row.appendChild(a);
+      row.appendChild(check);
+      startupTasksEl.appendChild(row);
+    });
+  } catch {
+    // keep the default values
+  }
 }
 
 voiceRepliesToggle?.addEventListener("change", () => {
@@ -1311,3 +1544,4 @@ setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();
 randomizeTryPrompt();
+loadStartupBenchmarks();

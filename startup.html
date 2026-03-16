@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Your Startup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="app-frame" aria-label="your startup">
+        <header class="topbar">
+          <button class="icon-button" id="menuButton" aria-label="menu" type="button">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+
+          <div class="topbar-spacer" aria-hidden="true"></div>
+
+          <div class="topbar-logo" aria-hidden="true">
+            <div class="anna-logo anna-logo-small image-loaded">
+              <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+              <span class="logo-triangle"></span>
+              <span class="logo-orb"></span>
+            </div>
+          </div>
+        </header>
+
+        <aside class="menu-drawer" id="menuDrawer" aria-hidden="true">
+          <button class="menu-scrim" id="menuScrim" aria-label="close menu" type="button"></button>
+          <div class="menu-panel" role="dialog" aria-label="menu">
+            <button class="menu-close" id="menuClose" aria-label="close" type="button">×</button>
+            <nav class="menu-list" aria-label="menu items">
+              <a class="menu-item" href="index.html">talk to anna</a>
+              <button type="button" class="menu-item" id="settingsButton">settings</button>
+            </nav>
+          </div>
+        </aside>
+
+        <section class="startup-stage" id="startupStage" aria-live="polite">
+          <h1 class="startup-title" id="startupTitleText">your startup</h1>
+
+          <div class="startup-name" id="startupNameText">startup</div>
+
+          <div class="startup-stats" aria-label="startup stats">
+            <div class="stat-card">
+              <div class="stat-label">time til launch</div>
+              <div class="stat-value" id="daysToLaunch">34</div>
+              <div class="stat-sub">days</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">projects left</div>
+              <div class="stat-value" id="projectsLeft">6</div>
+              <div class="stat-sub">tasks</div>
+            </div>
+          </div>
+
+          <div class="startup-ready">ready to jump in?</div>
+
+          <div class="startup-tasks" id="startupTasks" role="list" aria-label="tasks"></div>
+        </section>
+
+        <section class="modal" id="settingsModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="settings">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <div class="modal-title">settings</div>
+                <div class="modal-sub">startup info and profile</div>
+              </div>
+            </div>
+
+            <div class="modal-body">
+              <div class="settings-row">
+                <div>
+                  <div class="settings-label">startup</div>
+                  <div class="settings-value" id="settingsStartupName">not set</div>
+                </div>
+                <button class="glass-button" type="button" id="settingsRename">rename</button>
+              </div>
+
+              <div class="settings-row">
+                <div>
+                  <div class="settings-label">profile</div>
+                  <div class="settings-value" id="settingsProfile">not set</div>
+                </div>
+                <button class="glass-button" type="button" id="editProfile">edit</button>
+              </div>
+            </div>
+
+            <div class="modal-footer">
+              <button class="glass-button" type="button" data-modal-close>close</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="startupNameModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="startup name">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <div class="modal-title">startup name</div>
+                <div class="modal-sub">what should we call it?</div>
+              </div>
+            </div>
+
+            <div class="modal-body">
+              <input
+                id="startupNameInput"
+                class="text-input"
+                type="text"
+                inputmode="text"
+                autocomplete="off"
+                placeholder="name"
+              />
+            </div>
+
+            <div class="modal-footer">
+              <button class="glass-button" type="button" data-modal-close>cancel</button>
+              <button class="glass-button primary" type="button" id="startupNameSave">save</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="accountModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel" role="dialog" aria-label="profile">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <div class="modal-title">profile</div>
+                <div class="modal-sub">kept on this device</div>
+              </div>
+            </div>
+
+            <div class="modal-body">
+              <label class="field">
+                <span>name</span>
+                <input id="accountName" class="text-input" type="text" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>email</span>
+                <input id="accountEmail" class="text-input" type="email" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>payment</span>
+                <input id="accountPayment" class="text-input" type="text" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>subscription</span>
+                <select id="accountSubscription" class="text-input">
+                  <option value="starter">starter</option>
+                  <option value="pro">pro</option>
+                  <option value="team">team</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="modal-footer">
+              <button class="glass-button" type="button" data-modal-close>cancel</button>
+              <button class="glass-button primary" type="button" id="accountSave">save</button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
