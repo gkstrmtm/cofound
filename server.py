@@ -179,6 +179,41 @@ def post_binary(url: str, headers: dict[str, str], body: dict) -> tuple[int, byt
         return exc.code, exc.read()
 
 
+def request_json(url: str, headers: dict[str, str], method: str = "GET", body=None) -> tuple[int, object]:
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    req = urlrequest.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urlrequest.urlopen(req) as response:
+            raw = response.read().decode("utf-8")
+            return response.status, json.loads(raw or "null")
+    except urlerror.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(raw or "null")
+        except Exception:
+            return exc.code, {"error": raw or f"http {exc.code}"}
+
+
+def get_supabase_state_headers(access_token: str) -> tuple[Optional[str], Optional[dict[str, str]]]:
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip()
+    admin_key = get_supabase_admin_key()
+    public_key, _looks_secret = get_supabase_public_key()
+    api_key = admin_key or public_key
+    auth_token = admin_key or access_token
+
+    if not supabase_url or not api_key or not auth_token:
+        return None, None
+
+    return (
+        supabase_url,
+        {
+            "apikey": api_key,
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 def get_or_cache_elevenlabs_voice_id(api_key: str) -> str:
     global cached_eleven_voice_id
 
@@ -334,6 +369,74 @@ def auth_signup():
         "requiresEmailConfirmation": not bool(data.get("session")),
         "redirectTo": redirect_to or None,
     })
+
+
+@app.get("/api/state")
+def load_state():
+    email = (request.args.get("email") or "").strip().lower()
+    access_token = (request.headers.get("x-supabase-access-token") or "").strip()
+    if not email:
+        return jsonify({"ok": False, "error": "email required"}), 400
+
+    supabase_url, headers = get_supabase_state_headers(access_token)
+    if not supabase_url or not headers:
+        return jsonify({"ok": False, "error": "missing supabase auth context"}), 401
+
+    status, data = request_json(
+        f"{supabase_url}/rest/v1/anna_user_state?select=state,name,updated_at&email=eq.{email}&limit=1",
+        {**headers, "Accept": "application/json"},
+        method="GET",
+    )
+    if status >= 400:
+        detail = (
+            (data.get("message") if isinstance(data, dict) else None)
+            or (data.get("error") if isinstance(data, dict) else None)
+            or (data.get("hint") if isinstance(data, dict) else None)
+            or f"http {status}"
+        )
+        return jsonify({"ok": False, "error": "state load failed", "detail": str(detail)}), 500
+
+    row = data[0] if isinstance(data, list) and data else {}
+    return jsonify({"ok": True, "state": row.get("state") if isinstance(row, dict) else None, "name": row.get("name") if isinstance(row, dict) else ""})
+
+
+@app.post("/api/state")
+def save_state():
+    payload = request.get_json(silent=True) or {}
+    email = (payload.get("email") or "").strip().lower()
+    access_token = (request.headers.get("x-supabase-access-token") or "").strip()
+    if not email:
+        return jsonify({"ok": False, "error": "email required"}), 400
+
+    supabase_url, headers = get_supabase_state_headers(access_token)
+    if not supabase_url or not headers:
+        return jsonify({"ok": False, "error": "missing supabase auth context"}), 401
+
+    row = {
+        "email": email,
+        "name": (payload.get("name") or "").strip(),
+        "state": payload.get("state") if isinstance(payload.get("state"), dict) else {},
+        "updated_at": payload.get("updated_at") or request.headers.get("date") or None,
+    }
+    if not row["updated_at"]:
+        row["updated_at"] = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+
+    status, data = request_json(
+        f"{supabase_url}/rest/v1/anna_user_state?on_conflict=email",
+        {**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+        method="POST",
+        body=[row],
+    )
+    if status >= 400:
+        detail = (
+            (data.get("message") if isinstance(data, dict) else None)
+            or (data.get("error") if isinstance(data, dict) else None)
+            or (data.get("hint") if isinstance(data, dict) else None)
+            or f"http {status}"
+        )
+        return jsonify({"ok": False, "error": "state save failed", "detail": str(detail)}), 500
+
+    return jsonify({"ok": True})
 
 
 @app.get("/api/voices")

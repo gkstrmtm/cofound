@@ -10,6 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700&display=swap"
       rel="stylesheet"
     />
+    <link rel="icon" type="image/png" href="brand/1.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -282,9 +283,36 @@
                 </div>
                 <button type="button" class="glass-button" id="chooseVoice">choose</button>
               </div>
+
+              <div class="settings-row" role="listitem">
+                <div>
+                  <div class="settings-title">chat history</div>
+                  <div class="settings-subtitle">scroll past sessions and saved chats</div>
+                </div>
+                <button type="button" class="glass-button" id="historyButton">view</button>
+              </div>
             </div>
 
             <div class="modal-actions">
+              <button type="button" class="glass-button primary" data-modal-close>done</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="historyModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel modal-panel-wide" role="dialog" aria-label="chat history">
+            <div class="modal-header modal-header-stacked">
+              <div>
+                <h2>chat history</h2>
+                <p>saved sessions across your account</p>
+              </div>
+            </div>
+
+            <div class="history-empty" id="historyEmpty">no saved chats yet.</div>
+            <div class="history-list" id="historyList"></div>
+
+            <div class="modal-actions modal-actions-single">
               <button type="button" class="glass-button primary" data-modal-close>done</button>
             </div>
           </div>

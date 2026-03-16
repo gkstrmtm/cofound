@@ -65,9 +65,14 @@ const settingsStartupName = document.getElementById("settingsStartupName");
 const settingsRename = document.getElementById("settingsRename");
 const settingsProfile = document.getElementById("settingsProfile");
 const editProfile = document.getElementById("editProfile");
+const historyButton = document.getElementById("historyButton");
 const voiceRepliesToggle = document.getElementById("voiceRepliesToggle");
 const settingsVoice = document.getElementById("settingsVoice");
 const chooseVoice = document.getElementById("chooseVoice");
+
+const historyModal = document.getElementById("historyModal");
+const historyList = document.getElementById("historyList");
+const historyEmpty = document.getElementById("historyEmpty");
 
 const voiceModal = document.getElementById("voiceModal");
 const voiceStatus = document.getElementById("voiceStatus");
@@ -118,6 +123,7 @@ const STORAGE_KEYS = {
   authUsers: "anna:authUsers",
   authUser: "anna:authUser",
   memoryLog: "anna:memoryLog",
+  chatSessions: "anna:chatSessions",
   startupLists: "anna:startupLists",
   taskState: "anna:taskState",
   activeTask: "anna:activeTask"
@@ -132,6 +138,7 @@ let interimEl = null;
 const pendingEls = new Map();
 
 let conversation = [];
+let currentChatSessionId = "";
 
 let isListeningNow = false;
 let persistentListeningEnabled = false;
@@ -153,7 +160,6 @@ let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
 let ttsAudioEl = null;
-let ttsBrowserUtterance = null;
 let ttsFetchInFlight = 0;
 let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
@@ -341,6 +347,7 @@ const REMOTE_SYNC_TEXT_KEYS = new Set([
 
 const REMOTE_SYNC_JSON_KEYS = new Set([
   STORAGE_KEYS.memoryLog,
+  STORAGE_KEYS.chatSessions,
   STORAGE_KEYS.startupLists,
   STORAGE_KEYS.taskState,
   STORAGE_KEYS.activeTask
@@ -480,6 +487,15 @@ async function getSupabaseClient() {
   return initSupabaseClient();
 }
 
+async function getSupabaseAccessToken() {
+  const client = await getSupabaseClient();
+  if (!client) {
+    return "";
+  }
+  const { data } = await client.auth.getSession();
+  return String(data?.session?.access_token || "").trim();
+}
+
 async function loadRemoteStateForCurrentUser() {
   const client = await getSupabaseClient();
   const user = getAuthUser();
@@ -490,20 +506,42 @@ async function loadRemoteStateForCurrentUser() {
     return;
   }
 
-  const { data, error } = await client
-    .from("anna_user_state")
-    .select("state")
-    .eq("email", user.email)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message || "couldn't load account state");
+  let loaded = false;
+  const accessToken = await getSupabaseAccessToken();
+  try {
+    const res = await fetch(`/api/state?email=${encodeURIComponent(user.email)}`, {
+      method: "GET",
+      headers: accessToken ? { "x-supabase-access-token": accessToken } : undefined
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.state) {
+        applyPersistedSnapshot(data.state);
+      } else {
+        await saveRemoteStateNow();
+      }
+      loaded = true;
+    }
+  } catch {
+    // fall through to direct client fallback
   }
 
-  if (data?.state) {
-    applyPersistedSnapshot(data.state);
-  } else {
-    await saveRemoteStateNow();
+  if (!loaded) {
+    const { data, error } = await client
+      .from("anna_user_state")
+      .select("state")
+      .eq("email", user.email)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(error.message || "couldn't load account state");
+    }
+
+    if (data?.state) {
+      applyPersistedSnapshot(data.state);
+    } else {
+      await saveRemoteStateNow();
+    }
   }
 
   remoteStateLoadedForUser = user.email;
@@ -525,6 +563,23 @@ async function saveRemoteStateNow() {
     state: getPersistedSnapshot(),
     updated_at: new Date().toISOString()
   };
+
+  const accessToken = await getSupabaseAccessToken();
+  try {
+    const res = await fetch("/api/state", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(accessToken ? { "x-supabase-access-token": accessToken } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      return;
+    }
+  } catch {
+    // fall through to direct client fallback
+  }
 
   const { error } = await client.from("anna_user_state").upsert(payload, { onConflict: "email" });
   if (error) {
@@ -994,6 +1049,134 @@ function getCurrentTaskTitle() {
   return readActiveTaskContext()?.title || "";
 }
 
+function readChatSessions() {
+  const sessions = readJson(STORAGE_KEYS.chatSessions, []);
+  return Array.isArray(sessions) ? sessions : [];
+}
+
+function writeChatSessions(sessions) {
+  writeJson(STORAGE_KEYS.chatSessions, Array.isArray(sessions) ? sessions : []);
+}
+
+function getChatSessionsForUser(userId = getCurrentUserId()) {
+  return readChatSessions()
+    .filter((session) => String(session?.userId || "") === userId)
+    .map((session) => ({
+      id: String(session?.id || ""),
+      userId: String(session?.userId || ""),
+      startedAt: Number(session?.startedAt || 0) || 0,
+      updatedAt: Number(session?.updatedAt || 0) || 0,
+      page: String(session?.page || "talk").trim() || "talk",
+      title: String(session?.title || "").trim(),
+      entries: Array.isArray(session?.entries)
+        ? session.entries
+            .map((entry) => ({
+              role: entry?.role === "user" ? "user" : "ai",
+              text: String(entry?.text || "").trim(),
+              ts: Number(entry?.ts || 0) || 0
+            }))
+            .filter((entry) => entry.text)
+            .slice(-80)
+        : []
+    }))
+    .filter((session) => session.id);
+}
+
+function getCurrentPageLabel() {
+  const path = String(window.location.pathname || "").toLowerCase();
+  if (path.endsWith("startup.html")) {
+    return "startup";
+  }
+  if (path.endsWith("task.html")) {
+    return "task";
+  }
+  return "talk";
+}
+
+function ensureCurrentChatSession() {
+  const userId = getCurrentUserId();
+  const sessions = readChatSessions();
+  const existing = sessions.find(
+    (session) => session && session.id === currentChatSessionId && String(session.userId || "") === userId
+  );
+  if (existing) {
+    return existing;
+  }
+
+  const now = Date.now();
+  const session = {
+    id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+    userId,
+    startedAt: now,
+    updatedAt: now,
+    page: getCurrentPageLabel(),
+    title: getCurrentTaskTitle() || getStartupName() || "anna",
+    entries: []
+  };
+
+  currentChatSessionId = session.id;
+  writeChatSessions([...sessions, session].slice(-60));
+  return session;
+}
+
+function appendChatSessionEntry(role, text) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) {
+    return;
+  }
+
+  const session = ensureCurrentChatSession();
+  const sessions = readChatSessions();
+  const nextSessions = sessions.map((item) => {
+    if (!item || item.id !== session.id) {
+      return item;
+    }
+    const nextEntries = [
+      ...(Array.isArray(item.entries) ? item.entries : []),
+      { role: role === "user" ? "user" : "ai", text: cleaned, ts: Date.now() }
+    ].slice(-80);
+    return {
+      ...item,
+      userId: getCurrentUserId(),
+      updatedAt: Date.now(),
+      page: getCurrentPageLabel(),
+      title: getCurrentTaskTitle() || getStartupName() || item.title || "anna",
+      entries: nextEntries
+    };
+  });
+  writeChatSessions(nextSessions.slice(-60));
+}
+
+function formatSessionTimestamp(ts) {
+  if (!ts) {
+    return "recent";
+  }
+  try {
+    return new Date(ts).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
+  } catch {
+    return "recent";
+  }
+}
+
+function buildChatHistorySummary(userId = getCurrentUserId()) {
+  return getChatSessionsForUser(userId)
+    .filter((session) => session.id !== currentChatSessionId)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 3)
+    .map((session) => {
+      const sample = session.entries.slice(-4).map((entry) => `${entry.role}: ${entry.text.slice(0, 120)}`).join(" | ");
+      const title = session.title || session.page || "anna";
+      return `- ${formatSessionTimestamp(session.updatedAt)} · ${title}: ${sample}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function readMemoryLog() {
   const log = readJson(STORAGE_KEYS.memoryLog, []);
   return Array.isArray(log) ? log : [];
@@ -1032,10 +1215,25 @@ function formatRelativeTime(msAgo) {
 function buildMessagesForApi() {
   const nowIso = new Date().toISOString();
   const user = getAuthUser();
+  const profileName = getAccountValue(STORAGE_KEYS.userName);
+  const subscription = getAccountValue(STORAGE_KEYS.subscription);
   const log = readMemoryLog();
   const currentUserId = getCurrentUserId();
   const activeTask = readActiveTaskContext();
   const startupName = getStartupName();
+  const latestStartupItems = getLatestStartupItems(currentUserId).slice(0, 18);
+  const startupTaskLines = latestStartupItems
+    .map((title) => `${readTaskEntry(title, currentUserId).completed ? "[done]" : "[todo]"} ${title}`)
+    .join("\n");
+  const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
+  const activeTaskNotes = String(activeTaskState?.notes || "").trim();
+  const activeSubtasks = Array.isArray(activeTaskState?.subtasks)
+    ? activeTaskState.subtasks
+        .slice(0, 12)
+        .map((item) => `${item.completed ? "[done]" : "[todo]"} ${item.title}`)
+        .join("\n")
+    : "";
+  const chatHistorySummary = buildChatHistorySummary(currentUserId);
 
   const now = Date.now();
   const older = [];
@@ -1063,19 +1261,38 @@ function buildMessagesForApi() {
   if (user?.email) {
     sysParts.push(`signed in as: ${user.email}`);
   }
+  if (profileName) {
+    sysParts.push(`user name: ${profileName}`);
+  }
+  if (subscription) {
+    sysParts.push(`subscription plan: ${subscription}`);
+  }
   if (startupName) {
     sysParts.push(`startup name: ${startupName}`);
   }
   if (activeTask?.title) {
     sysParts.push(`active task the user is working on: ${activeTask.title}`);
   }
+  if (startupTaskLines) {
+    sysParts.push("current startup to-do list:\n" + startupTaskLines);
+  }
+  if (activeTaskNotes) {
+    sysParts.push(`active task notes:\n${activeTaskNotes.slice(0, 900)}`);
+  }
+  if (activeSubtasks) {
+    sysParts.push("active task subtasks:\n" + activeSubtasks);
+  }
   if (memoryLines) {
     sysParts.push("memory (older context):\n" + memoryLines);
+  }
+  if (chatHistorySummary) {
+    sysParts.push("saved chat history from earlier sessions:\n" + chatHistorySummary);
   }
   sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
   sysParts.push("match the depth to the ask: casual when the user wants quick help, but go deep when they want to build, diagnose, or decide something important.");
   sysParts.push("when going deep, think like a real cofounder: define the problem, state a point of view, show tradeoffs, and turn the answer into concrete priorities, experiments, or next moves.");
   sysParts.push("for deeper business answers, naturally cover what is happening, what you recommend, and what the user should do next, but do not force obvious section labels unless they improve readability.");
+  sysParts.push("you do have access to saved memory, prior chat history, startup tasks, and task notes included above. use them, and do not claim you can't remember when the information is present.");
 
   return [{ role: "system", content: sysParts.join("\n\n") }, ...conversation];
 }
@@ -1813,88 +2030,6 @@ function renderVoiceSetting() {
   settingsVoice.textContent = name ? name : "auto";
 }
 
-function canUseBrowserTtsFallback() {
-  return typeof window !== "undefined" && "speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function";
-}
-
-function getPreferredBrowserTtsVoice() {
-  if (!canUseBrowserTtsFallback()) {
-    return null;
-  }
-  const synth = window.speechSynthesis;
-  const voices = Array.isArray(synth.getVoices?.()) ? synth.getVoices() : [];
-  if (!voices.length) {
-    return null;
-  }
-
-  const selectedName = getSelectedVoiceName().toLowerCase();
-  if (selectedName) {
-    const exact = voices.find((voice) => String(voice?.name || "").trim().toLowerCase() === selectedName);
-    if (exact) {
-      return exact;
-    }
-    const partial = voices.find((voice) => String(voice?.name || "").trim().toLowerCase().includes(selectedName));
-    if (partial) {
-      return partial;
-    }
-  }
-
-  return (
-    voices.find((voice) => /^en(-|_)/i.test(String(voice?.lang || ""))) ||
-    voices.find((voice) => /english/i.test(String(voice?.name || ""))) ||
-    voices[0] ||
-    null
-  );
-}
-
-function playBrowserTts(text, sessionId) {
-  const cleaned = String(text || "").trim();
-  if (!cleaned || !canUseBrowserTtsFallback()) {
-    return false;
-  }
-
-  const synth = window.speechSynthesis;
-  const utterance = new window.SpeechSynthesisUtterance(cleaned);
-  const voice = getPreferredBrowserTtsVoice();
-  if (voice) {
-    utterance.voice = voice;
-    utterance.lang = voice.lang || "en-US";
-  } else {
-    utterance.lang = "en-US";
-  }
-  utterance.volume = getOutputVolume();
-  utterance.rate = 1;
-  utterance.pitch = 1;
-
-  ttsIsPlaying = true;
-  ttsBrowserUtterance = utterance;
-  ttsCurrentAudio = null;
-  ttsCurrentUrl = null;
-
-  const finish = () => {
-    if (ttsBrowserUtterance !== utterance) {
-      return;
-    }
-    ttsBrowserUtterance = null;
-    ttsIsPlaying = false;
-    playNextTts();
-    maybeResumeListeningAfterReply();
-  };
-
-  utterance.onend = finish;
-  utterance.onerror = finish;
-
-  try {
-    synth.cancel();
-    synth.speak(utterance);
-    return true;
-  } catch {
-    ttsBrowserUtterance = null;
-    ttsIsPlaying = false;
-    return false;
-  }
-}
-
 function stopAllTts() {
   ttsSessionId += 1;
   ttsQueue = [];
@@ -1913,15 +2048,6 @@ function stopAllTts() {
     }
   }
   ttsCurrentAudio = null;
-
-  if (ttsBrowserUtterance && canUseBrowserTtsFallback()) {
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // ignore
-    }
-  }
-  ttsBrowserUtterance = null;
 
   if (ttsCurrentUrl) {
     try {
@@ -1944,7 +2070,7 @@ function playNextTts() {
   if (!next) {
     return;
   }
-  const { url, text, sessionId, mode } = next;
+  const { url, sessionId } = next;
   if (sessionId !== ttsSessionId) {
     if (url) {
       try {
@@ -1954,13 +2080,6 @@ function playNextTts() {
       }
     }
     return playNextTts();
-  }
-
-  if (mode === "browser") {
-    if (!playBrowserTts(text, sessionId)) {
-      return playNextTts();
-    }
-    return;
   }
 
   ttsIsPlaying = true;
@@ -2049,8 +2168,6 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
         body: JSON.stringify(voiceId ? { text: cleaned, voiceId } : { text: cleaned })
       });
       if (!res.ok) {
-        ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
-        playNextTts();
         return;
       }
       const blob = await res.blob();
@@ -2062,8 +2179,7 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
       playNextTts();
     })
     .catch(() => {
-      ttsQueue.push({ text: cleaned, sessionId: mySession, mode: "browser" });
-      playNextTts();
+      // ignore; ElevenLabs should be the single voice path
     })
     .finally(() => {
       ttsFetchInFlight = Math.max(0, ttsFetchInFlight - 1);
@@ -2152,6 +2268,7 @@ function pushEntry(role, text) {
   interimText = "";
 
   transcriptEntries = [...transcriptEntries, { role, text: cleaned }].slice(-80);
+  appendChatSessionEntry(role, cleaned);
   appendLine(role, cleaned);
 }
 
@@ -2199,6 +2316,9 @@ function resolvePendingAnna(pendingId, text) {
     el.textContent = `“${cleaned}”`;
   }
   pendingEls.delete(pendingId);
+  if (cleaned && cleaned !== "…") {
+    appendChatSessionEntry("ai", cleaned);
+  }
   scrollTranscriptIfNeeded();
 }
 
@@ -3059,6 +3179,7 @@ function closeAllModals() {
   setModalOpen(authModal, false);
   setModalOpen(voiceModal, false);
   setModalOpen(subscriptionModal, false);
+  setModalOpen(historyModal, false);
   setTypeComposerOpen(false);
 }
 
@@ -3081,6 +3202,65 @@ wireModalClose(accountModal);
 wireModalClose(authModal);
 wireModalClose(voiceModal);
 wireModalClose(subscriptionModal);
+wireModalClose(historyModal);
+
+function renderHistoryModal() {
+  if (!historyList) {
+    return;
+  }
+
+  const sessions = getChatSessionsForUser()
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 40);
+
+  historyList.innerHTML = "";
+  if (historyEmpty) {
+    historyEmpty.classList.toggle("hidden", sessions.length > 0);
+  }
+
+  sessions.forEach((session) => {
+    const card = document.createElement("section");
+    card.className = "history-session";
+
+    const header = document.createElement("div");
+    header.className = "history-session-header";
+
+    const title = document.createElement("div");
+    title.className = "history-session-title";
+    title.textContent = session.title || session.page || "anna";
+
+    const meta = document.createElement("div");
+    meta.className = "history-session-meta";
+    meta.textContent = `${formatSessionTimestamp(session.updatedAt)} · ${session.entries.length} messages`;
+
+    header.appendChild(title);
+    header.appendChild(meta);
+    card.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "history-session-body";
+
+    session.entries.forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = `history-entry ${entry.role === "user" ? "user" : "ai"}`;
+
+      const role = document.createElement("span");
+      role.className = "history-entry-role";
+      role.textContent = entry.role === "user" ? "you" : "anna";
+
+      const text = document.createElement("p");
+      text.className = "history-entry-text";
+      text.textContent = entry.text;
+
+      row.appendChild(role);
+      row.appendChild(text);
+      body.appendChild(row);
+    });
+
+    card.appendChild(body);
+    historyList.appendChild(card);
+  });
+}
 
 function getSelectedSubscription() {
   return getSubscriptionLabel(
@@ -3108,6 +3288,7 @@ function refreshUiFromStoredState() {
   renderStartupDashboard();
   renderTaskWorkspace();
   setSelectedSubscription(getAccountValue(STORAGE_KEYS.subscription) || "starter");
+  renderHistoryModal();
 }
 
 async function bootstrapAuthAndState() {
@@ -3118,6 +3299,7 @@ async function bootstrapAuthAndState() {
   }
 
   const applySession = async (session) => {
+    currentChatSessionId = "";
     if (session?.user?.email) {
       setAuthSession({
         email: session.user.email,
@@ -3310,6 +3492,7 @@ startupNameSave?.addEventListener("click", () => {
 
 settingsButton?.addEventListener("click", () => {
   renderStartupName();
+  renderHistoryModal();
   setMenuOpen(false);
   closeAllModals();
   setModalOpen(settingsModal, true);
@@ -3321,6 +3504,12 @@ settingsRename?.addEventListener("click", () => {
 });
 
 editProfile?.addEventListener("click", () => openAccountModal("name"));
+
+historyButton?.addEventListener("click", () => {
+  renderHistoryModal();
+  setModalOpen(settingsModal, false);
+  setModalOpen(historyModal, true);
+});
 
 accountSave?.addEventListener("click", () => {
   const nextName = String(accountName?.value || "").trim();

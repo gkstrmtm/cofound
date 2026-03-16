@@ -10,6 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700&display=swap"
       rel="stylesheet"
     />
+    <link rel="icon" type="image/png" href="brand/1.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -191,10 +192,44 @@
                 </div>
                 <button class="glass-button" type="button" id="editProfile">edit</button>
               </div>
+
+              <div class="settings-row">
+                <div>
+                  <div class="settings-label">chat history</div>
+                  <div class="settings-value">saved sessions and past chats</div>
+                </div>
+                <button class="glass-button" type="button" id="historyButton">view</button>
+              </div>
             </div>
 
             <div class="modal-footer">
               <button class="glass-button" type="button" data-modal-close>close</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="modal" id="historyModal" aria-hidden="true">
+          <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
+          <div class="modal-panel modal-panel-wide" role="dialog" aria-label="chat history">
+            <div class="modal-header">
+              <div class="anna-logo anna-logo-modal" aria-hidden="true">
+                <img class="logo-image" src="brand/1.png" alt="" decoding="async" />
+                <span class="logo-triangle"></span>
+                <span class="logo-orb"></span>
+              </div>
+              <div>
+                <div class="modal-title">chat history</div>
+                <div class="modal-sub">saved sessions across your account</div>
+              </div>
+            </div>
+
+            <div class="modal-body modal-body-history">
+              <div class="history-empty" id="historyEmpty">no saved chats yet.</div>
+              <div class="history-list" id="historyList"></div>
+            </div>
+
+            <div class="modal-footer">
+              <button class="glass-button primary" type="button" data-modal-close>done</button>
             </div>
           </div>
         </section>
