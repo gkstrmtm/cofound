@@ -310,6 +310,39 @@ function submitRecognizedUserText(text) {
     return;
   }
 
+  const localCommand = maybeHandleLocalVoiceCommand(normalized);
+  if (localCommand?.handled) {
+    pushEntry("user", normalized);
+    appendToMemory("user", normalized);
+
+    if (localCommand.stopSession) {
+      stopAllTts();
+      pendingResumeListening = false;
+      persistentListeningEnabled = false;
+      singleTurnVoiceMode = false;
+      setListening(false);
+      if (localCommand.reply) {
+        pushEntry("ai", localCommand.reply);
+        appendToMemory("assistant", localCommand.reply);
+      }
+      startWakeWordMonitoring();
+      return;
+    }
+
+    if (persistentListeningEnabled) {
+      pauseListeningForReply();
+    }
+    if (localCommand.reply) {
+      pushEntry("ai", localCommand.reply);
+      appendToMemory("assistant", localCommand.reply);
+      if (isVoiceOutputEnabled()) {
+        enqueueElevenLabsTts(localCommand.reply);
+      }
+    }
+    maybeResumeListeningAfterReply();
+    return;
+  }
+
   pushEntry("user", normalized);
   appendToMemory("user", normalized);
 
@@ -447,11 +480,64 @@ function startInlineVoiceCapture(source = "tap") {
   stopWakeWordListeningSession();
   clearInlineVoiceHideTimer();
   setInlineVoiceTrayOpen(true);
-  singleTurnVoiceMode = true;
+  singleTurnVoiceMode = false;
   persistentListeningEnabled = true;
   pendingResumeListening = false;
   playRecordBeep(true);
   setListening(true);
+}
+
+function isWakeSessionExitPhrase(text) {
+  return /(?:^|\b)(?:bye|goodbye)\s+anna\b/.test(String(text || "").trim().toLowerCase());
+}
+
+function findTaskDoneIntent(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized || !/(?:done|finished|complete|completed)/.test(normalized)) {
+    return "";
+  }
+
+  const activeTitle = getCurrentTaskTitle();
+  if (
+    activeTitle &&
+    (getCurrentPageLabel() === "task" || /\b(this|it|current task|this task|the task)\b/.test(normalized) || /\bi(?:'m| am)? done\b/.test(normalized))
+  ) {
+    return activeTitle;
+  }
+
+  const taskTitles = getTaskEntriesForUser().map((entry) => normalizeTaskTitle(entry.title)).filter(Boolean);
+  return taskTitles.find((title) => normalized.includes(title)) || "";
+}
+
+function maybeHandleLocalVoiceCommand(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized) {
+    return { handled: false };
+  }
+
+  if (shouldUseWakeWordMode() && isWakeSessionExitPhrase(normalized)) {
+    return {
+      handled: true,
+      stopSession: true,
+      reply: "okay. say hi anna when you want me again."
+    };
+  }
+
+  const doneTitle = findTaskDoneIntent(normalized);
+  if (doneTitle) {
+    const entry = readTaskEntry(doneTitle);
+    if (!entry.completed) {
+      updateTaskEntry(doneTitle, (current) => ({ ...current, completed: true }));
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    }
+    return {
+      handled: true,
+      reply: `${doneTitle} is marked done.`
+    };
+  }
+
+  return { handled: false };
 }
 
 function ensureWakeWordRecognizer() {
