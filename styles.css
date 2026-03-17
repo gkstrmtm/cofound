@@ -354,16 +354,29 @@ button {
   border: 1px solid rgba(53, 95, 0, 0.18);
 }
 
+.startup-task-main {
+  min-width: 0;
+  flex: 1;
+}
+
 .startup-task a,
 .startup-task button {
   color: inherit;
 }
 
 .startup-task-title {
+  display: block;
   color: var(--olive);
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 4px;
+}
+
+.startup-task-meta {
+  margin-top: 0.24rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .startup-task-check {
@@ -616,6 +629,116 @@ button {
   color: var(--olive);
   font-weight: 650;
   line-height: 1.45;
+}
+
+.task-owner-summary {
+  color: var(--olive);
+}
+
+.task-owner-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.task-owner-chip {
+  padding: 0.42rem 0.68rem;
+  border-radius: 999px;
+  background: rgba(126, 178, 88, 0.16);
+  border: 1px solid rgba(96, 142, 60, 0.2);
+  color: var(--olive-deep);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.task-operator-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.task-workflow-badge,
+.task-progress-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0.45rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 142, 60, 0.22);
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--olive-deep);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.task-workflow-badge[data-status="active"] {
+  background: rgba(126, 178, 88, 0.26);
+}
+
+.task-workflow-badge[data-status="blocked"] {
+  background: rgba(255, 154, 83, 0.2);
+  border-color: rgba(255, 154, 83, 0.35);
+}
+
+.task-workflow-badge[data-status="paused"] {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.task-workflow-badge[data-status="done"] {
+  background: rgba(96, 142, 60, 0.24);
+}
+
+.task-progress-track {
+  width: 100%;
+  height: 10px;
+  margin-top: 0.85rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+  border: 1px solid rgba(96, 142, 60, 0.14);
+}
+
+.task-progress-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 154, 83, 0.82), rgba(126, 178, 88, 0.88));
+  transition: width 180ms ease;
+}
+
+.task-operator-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-top: 0.8rem;
+}
+
+.task-operator-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  flex: 0 0 5.3rem;
+}
+
+.task-operator-value {
+  color: var(--olive);
+  text-align: right;
+  font-weight: 700;
+}
+
+.task-operator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.task-operator-actions .glass-button {
+  min-height: 40px;
 }
 
 .task-notes-label,

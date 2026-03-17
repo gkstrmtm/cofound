@@ -59,6 +59,44 @@
             <div class="task-page-status" id="taskPageStatus">in progress</div>
           </div>
 
+          <div class="task-helper-card task-owner-card">
+            <div class="task-related-title">owner mode</div>
+            <div class="task-owner-summary" id="taskOwnerSummary">
+              give anna a real operating target like “work on this today”, “done by 5”, or “make this top priority.”
+            </div>
+            <div class="task-owner-chips" id="taskOwnerChips"></div>
+          </div>
+
+          <div class="task-helper-card task-operator-card">
+            <div class="task-related-title">operator console</div>
+            <div class="task-operator-topline">
+              <div class="task-workflow-badge" id="taskWorkflowBadge" data-status="queued">queued</div>
+              <div class="task-progress-pill" id="taskProgressText">0%</div>
+            </div>
+            <div class="task-progress-track" aria-hidden="true">
+              <div class="task-progress-fill" id="taskProgressFill"></div>
+            </div>
+            <div class="task-operator-row">
+              <span class="task-operator-label">next move</span>
+              <span class="task-operator-value" id="taskNextActionText">pick a task to load the next move</span>
+            </div>
+            <div class="task-operator-row">
+              <span class="task-operator-label">blocker</span>
+              <span class="task-operator-value" id="taskBlockerText">none</span>
+            </div>
+            <div class="task-operator-row">
+              <span class="task-operator-label">sprint</span>
+              <span class="task-operator-value" id="taskSessionText">not running</span>
+            </div>
+            <div class="task-operator-actions">
+              <button class="glass-button primary" id="taskStartNowButton" type="button">start now</button>
+              <button class="glass-button" id="taskFinishStepButton" type="button">finish next step</button>
+              <button class="glass-button" id="taskPauseButton" type="button">pause</button>
+              <button class="glass-button" id="taskUnblockButton" type="button">clear blocker</button>
+              <button class="glass-button" id="taskPlanButton" type="button">build plan</button>
+            </div>
+          </div>
+
           <label class="task-notes-card">
             <span class="task-notes-label">working notes</span>
             <textarea

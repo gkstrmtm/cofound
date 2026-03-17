@@ -24,6 +24,19 @@ const startupTasksEl = document.getElementById("startupTasks");
 const taskStage = document.getElementById("taskStage");
 const taskPageTitle = document.getElementById("taskPageTitle");
 const taskPageStatus = document.getElementById("taskPageStatus");
+const taskOwnerSummary = document.getElementById("taskOwnerSummary");
+const taskOwnerChips = document.getElementById("taskOwnerChips");
+const taskWorkflowBadge = document.getElementById("taskWorkflowBadge");
+const taskProgressText = document.getElementById("taskProgressText");
+const taskProgressFill = document.getElementById("taskProgressFill");
+const taskNextActionText = document.getElementById("taskNextActionText");
+const taskBlockerText = document.getElementById("taskBlockerText");
+const taskSessionText = document.getElementById("taskSessionText");
+const taskStartNowButton = document.getElementById("taskStartNowButton");
+const taskFinishStepButton = document.getElementById("taskFinishStepButton");
+const taskPauseButton = document.getElementById("taskPauseButton");
+const taskUnblockButton = document.getElementById("taskUnblockButton");
+const taskPlanButton = document.getElementById("taskPlanButton");
 const taskDoneToggle = document.getElementById("taskDoneToggle");
 const taskNotesInput = document.getElementById("taskNotesInput");
 const taskTalkButton = document.getElementById("taskTalkButton");
@@ -1105,6 +1118,16 @@ function renameTaskEverywhere(fromTitle, toTitle, userId = getCurrentUserId()) {
     completed: Boolean(existing?.completed ?? current.completed),
     notes: String(existing?.notes || current.notes || ""),
     subtasks: normalizeSubtaskList(existing?.subtasks || current.subtasks),
+    priority: normalizeTaskPriority(existing?.priority ?? current.priority),
+    focusLabel: normalizeTaskFocusLabel(existing?.focusLabel || current.focusLabel),
+    workflowStatus: normalizeTaskWorkflowStatus(existing?.workflowStatus || current.workflowStatus),
+    nextAction: normalizeTaskTextField(existing?.nextAction || current.nextAction || "", 180),
+    blocker: normalizeTaskTextField(existing?.blocker || current.blocker || "", 180),
+    progress: normalizeTaskProgress(existing?.progress ?? current.progress),
+    sessionStartedAt: Number(existing?.sessionStartedAt ?? current.sessionStartedAt ?? 0) || 0,
+    sessionEndsAt: Number(existing?.sessionEndsAt ?? current.sessionEndsAt ?? 0) || 0,
+    dueAt: Number(existing?.dueAt ?? current.dueAt ?? 0) || 0,
+    dueLabel: String(existing?.dueLabel || current.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Date.now()
   };
   delete userMap[oldKey];
@@ -1205,6 +1228,99 @@ function markCurrentTaskSubtaskDone(text, taskTitle = getCurrentTaskTitle(), use
   return true;
 }
 
+function resolveTaskReference(referenceText, fallbackTitle = getCurrentTaskTitle(), userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(referenceText);
+  if (!normalized) {
+    return fallbackTitle || "";
+  }
+  if (/^(?:this|current)(?: task)?$/.test(normalized) || /^(?:task i(?:'| a)m on|what i'm doing right now)$/.test(normalized)) {
+    return fallbackTitle || "";
+  }
+  return findMatchingTaskTitle(normalized, userId) || normalized;
+}
+
+function parseTaskDuePhrase(rawText) {
+  const cleaned = String(rawText || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^[\s,:-]+/, "")
+    .replace(/[.?!]+$/, "");
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const now = new Date();
+  const dueDate = new Date(now);
+  dueDate.setSeconds(0, 0);
+
+  let explicitDay = false;
+  let focusLabel = "";
+  if (/\btomorrow\b/.test(cleaned)) {
+    explicitDay = true;
+    focusLabel = "tomorrow";
+    dueDate.setDate(dueDate.getDate() + 1);
+  } else if (/\btonight\b/.test(cleaned)) {
+    explicitDay = true;
+    focusLabel = "tonight";
+  } else if (/\btoday\b/.test(cleaned)) {
+    explicitDay = true;
+    focusLabel = "today";
+  }
+
+  const timeMatch = cleaned.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  if (timeMatch) {
+    let hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2] || 0) || 0;
+    const meridiem = timeMatch[3];
+
+    if (meridiem === "am") {
+      hour = hour === 12 ? 0 : hour;
+    } else if (meridiem === "pm") {
+      hour = hour === 12 ? 12 : hour + 12;
+    } else if (hour !== 12 && (/\b(?:tonight|afternoon|evening)\b/.test(cleaned) || hour <= 7)) {
+      hour += 12;
+    }
+
+    dueDate.setHours(hour === 24 ? 12 : hour, minute, 0, 0);
+    if (!explicitDay && dueDate.getTime() < Date.now() - 5 * 60 * 1000) {
+      dueDate.setDate(dueDate.getDate() + 1);
+    }
+
+    return {
+      dueAt: dueDate.getTime(),
+      dueLabel: cleaned,
+      focusLabel: focusLabel || (explicitDay ? "" : "today")
+    };
+  }
+
+  if (/\bmorning\b/.test(cleaned)) {
+    dueDate.setHours(10, 0, 0, 0);
+  } else if (/\bafternoon\b/.test(cleaned)) {
+    dueDate.setHours(15, 0, 0, 0);
+  } else if (/\bevening\b/.test(cleaned)) {
+    dueDate.setHours(19, 0, 0, 0);
+  } else if (/\btonight\b/.test(cleaned)) {
+    dueDate.setHours(21, 0, 0, 0);
+  } else {
+    return {
+      dueAt: 0,
+      dueLabel: cleaned,
+      focusLabel
+    };
+  }
+
+  if (!explicitDay && dueDate.getTime() < Date.now() - 5 * 60 * 1000) {
+    dueDate.setDate(dueDate.getDate() + 1);
+  }
+
+  return {
+    dueAt: dueDate.getTime(),
+    dueLabel: cleaned,
+    focusLabel
+  };
+}
+
 function getLatestStartupActivityTs(userId = getCurrentUserId()) {
   const latestListTs = readStartupLists()
     .filter((entry) => String(entry?.userId || "") === userId)
@@ -1230,11 +1346,25 @@ function buildGreetingReply() {
   const startupItems = getLatestStartupItems().map((item) => normalizeTaskTitle(item)).filter(Boolean);
   if (activeTask) {
     const state = readTaskEntry(activeTask);
+    const ownership = buildTaskOwnershipParts(state);
+    const nextMove = getTaskNextActionText(state);
     const subtaskPreview = state.subtasks.filter((item) => !item.completed).slice(0, 2).map((item) => item.title);
+    if (normalizeTaskWorkflowStatus(state.workflowStatus) === "blocked" && state.blocker) {
+      return `hey. ${activeTask} is blocked on ${state.blocker}. want me to reframe the next move or unblock it?`;
+    }
+    if (normalizeTaskWorkflowStatus(state.workflowStatus) === "active") {
+      return `hey. we're already moving on ${activeTask}. next is ${nextMove}. ${formatTaskSessionText(state)}.`;
+    }
+    if (ownership.length && subtaskPreview.length) {
+      return `hey. we're on ${activeTask}. ${ownership.join(", ")}. next up looks like ${subtaskPreview.join(" and ")}. want me to tighten the deadline or knock out the next step?`;
+    }
+    if (ownership.length) {
+      return `hey. we're on ${activeTask}. ${ownership.join(", ")}. next is ${nextMove}. want me to break it down, tighten the notes, or move the target?`;
+    }
     if (subtaskPreview.length) {
       return `hey. we're on ${activeTask}. next up looks like ${subtaskPreview.join(" and ")}. want me to help you knock one of those out?`;
     }
-    return `hey. we're on ${activeTask}. want me to tighten the notes, break it into steps, or help you finish it?`;
+    return `hey. we're on ${activeTask}. next is ${nextMove}. want me to tighten the notes, break it into steps, or help you finish it?`;
   }
   if (startupItems.length) {
     const preview = startupItems.slice(0, 3).join(", ");
@@ -1316,6 +1446,19 @@ function maybeHandleLocalVoiceCommand(text) {
     return { handled: false };
   }
   const activeTaskTitle = getCurrentTaskTitle();
+  const refreshTaskViews = () => {
+    renderTaskWorkspace();
+    renderStartupDashboard();
+  };
+  const respondWithCurrentNextMove = (taskTitle) => {
+    const state = readTaskEntry(taskTitle);
+    const nextMove = getTaskNextActionText(state);
+    const blocker = normalizeTaskTextField(state.blocker || "", 180);
+    if (blocker) {
+      return `next move on ${taskTitle} is ${nextMove}, but it's blocked by ${blocker}.`;
+    }
+    return `next move on ${taskTitle} is ${nextMove}.`;
+  };
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1437,11 +1580,185 @@ function maybeHandleLocalVoiceCommand(text) {
     }
   }
 
+  const focusAndDueMatch = normalized.match(/(?:work on|focus on|prioritize|tackle)\s+(.+?)\s+(today|tonight|tomorrow|this week)\s+(?:and|&)\s+(?:have|get|make|finish|need)\s+(?:(?:it|this|that)\s+)?(?:done|finished|complete|completed)?\s*(?:by|before)\s+(.+)/);
+  if (focusAndDueMatch) {
+    const taskTitle = resolveTaskReference(focusAndDueMatch[1], activeTaskTitle);
+    const dueState = parseTaskDuePhrase(focusAndDueMatch[3]);
+    if (taskTitle && dueState) {
+      setTaskOwnershipState(taskTitle, {
+        focusLabel: focusAndDueMatch[2],
+        dueAt: dueState.dueAt,
+        dueLabel: dueState.dueLabel
+      });
+      startTaskWorkSession(taskTitle, { minutes: 45 });
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${taskTitle} is a ${focusAndDueMatch[2]} focus and due ${formatTaskDueLabel(dueState.dueAt, dueState.dueLabel)}.`
+      };
+    }
+  }
+
+  const focusMatch = normalized.match(/(?:work on|focus on|prioritize|tackle)\s+(.+?)\s+(today|tonight|tomorrow|this week)\b/);
+  if (focusMatch) {
+    const taskTitle = resolveTaskReference(focusMatch[1], activeTaskTitle);
+    if (taskTitle) {
+      setTaskOwnershipState(taskTitle, {
+        focusLabel: focusMatch[2]
+      });
+      setTaskExecutionState(taskTitle, {
+        workflowStatus: "active",
+        nextAction: readTaskEntry(taskTitle).nextAction || getTaskNextActionText(readTaskEntry(taskTitle))
+      });
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${taskTitle} is now a ${focusMatch[2]} focus.`
+      };
+    }
+  }
+
+  const priorityMatch = normalized.match(/(?:make|set)\s+(.+?)\s+(top|highest|high|urgent|low)\s+priority/) || normalized.match(/(.+?)\s+(?:is|as)\s+(top|highest|high|urgent|low)\s+priority/);
+  if (priorityMatch) {
+    const taskTitle = resolveTaskReference(priorityMatch[1], activeTaskTitle);
+    if (taskTitle) {
+      const priority = normalizeTaskPriority(priorityMatch[2]);
+      setTaskOwnershipState(taskTitle, { priority });
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${taskTitle} is now ${priority === "top" ? "top priority" : `${priority} priority`}.`
+      };
+    }
+  }
+
+  const dueMatch = normalized.match(/(?:have|get|make|finish|need)\s+(.+?)\s+(?:done|finished|complete|completed)\s+(?:by|before)\s+(.+)/) || normalized.match(/(?:set|change|move|update)\s+(?:the\s+)?(?:deadline|due(?:\s+time)?)\s+(?:for\s+)?(.+?)\s+(?:to|for)\s+(.+)/) || normalized.match(/(.+?)\s+(?:is\s+)?due\s+(?:by|before|for)?\s+(.+)/);
+  if (dueMatch) {
+    const taskTitle = resolveTaskReference(dueMatch[1], activeTaskTitle);
+    const dueState = parseTaskDuePhrase(dueMatch[2]);
+    if (taskTitle && dueState) {
+      setTaskOwnershipState(taskTitle, {
+        dueAt: dueState.dueAt,
+        dueLabel: dueState.dueLabel,
+        focusLabel: dueState.focusLabel || readTaskEntry(taskTitle).focusLabel
+      });
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${taskTitle} is due ${formatTaskDueLabel(dueState.dueAt, dueState.dueLabel)}.`
+      };
+    }
+  }
+
+  const nextActionMatch = normalized.match(/(?:set|make|change|update)\s+(?:the\s+)?(?:next\s+(?:step|move|action))(?:\s+for\s+(.+?))?\s+(?:to|as)\s+(.+)/);
+  if (nextActionMatch) {
+    const taskTitle = resolveTaskReference(nextActionMatch[1] || activeTaskTitle || "", activeTaskTitle);
+    if (taskTitle) {
+      setTaskNextAction(taskTitle, nextActionMatch[2]);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `locked. next move for ${taskTitle} is ${normalizeTaskTextField(nextActionMatch[2], 180)}.`
+      };
+    }
+  }
+
+  if (/(?:what(?:'s| is) next|next move|next step)/.test(normalized) && activeTaskTitle) {
+    return {
+      handled: true,
+      reply: respondWithCurrentNextMove(activeTaskTitle)
+    };
+  }
+
+  const blockedMatch = normalized.match(/(?:i(?:'| a)m|we(?:'| a)re)?\s*blocked(?:\s+on|\s+by|\s+because)?\s+(.+)/) || normalized.match(/(?:block|mark blocked)\s+(?:this|current|the task)?\s*(?:because|for)?\s+(.+)/);
+  if (blockedMatch && activeTaskTitle) {
+    blockTaskExecution(activeTaskTitle, blockedMatch[1]);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `got it. ${activeTaskTitle} is blocked on ${normalizeTaskTextField(blockedMatch[1], 180)}.`
+    };
+  }
+
+  if (/(?:unblock this|clear blocker|not blocked anymore|we're unblocked|i'm unblocked)/.test(normalized) && activeTaskTitle) {
+    clearTaskBlocker(activeTaskTitle);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `${activeTaskTitle} is unblocked.`
+    };
+  }
+
+  if (/(?:start working on|work on|start|resume)\s+(?:this|current task|this task|it)\s*(?:now)?$/.test(normalized) && activeTaskTitle) {
+    startTaskWorkSession(activeTaskTitle, { minutes: 45 });
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `on it. starting a 45 minute sprint on ${activeTaskTitle}. next is ${getTaskNextActionText(readTaskEntry(activeTaskTitle))}.`
+    };
+  }
+
+  if (/(?:pause|hold)\s+(?:this|current task|this task|it)$/.test(normalized) && activeTaskTitle) {
+    pauseTaskExecution(activeTaskTitle);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `paused ${activeTaskTitle}.`
+    };
+  }
+
+  if (/(?:finish|complete|do|knock out)\s+(?:the\s+)?next\s+(?:step|subtask|thing)/.test(normalized) && activeTaskTitle) {
+    const result = completeNextOpenSubtask(activeTaskTitle);
+    if (result.changed) {
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: result.remaining ? `done. finished ${result.title}. next up is ${getTaskNextActionText(readTaskEntry(activeTaskTitle))}.` : `done. finished ${result.title} and wrapped the task.`
+      };
+    }
+    return {
+      handled: true,
+      reply: `there isn't an open next step on ${activeTaskTitle} yet.`
+    };
+  }
+
+  if (/(?:make a plan|build a plan|break this down|turn this into a plan|give me a plan for this)/.test(normalized) && activeTaskTitle) {
+    const added = buildLocalTaskExecutionPlan(activeTaskTitle);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: added ? `built a tighter attack plan for ${activeTaskTitle} and loaded the next move.` : `${activeTaskTitle} already has a working plan.`
+    };
+  }
+
+  const progressMatch = normalized.match(/(?:set|make|move|update)\s+(?:the\s+)?progress(?:\s+for\s+(.+?))?\s+(?:to|at)\s+(\d{1,3})\s*(?:percent|%)/) || normalized.match(/(.+?)\s+is\s+(\d{1,3})\s*(?:percent|%)\s+done/);
+  if (progressMatch) {
+    const taskTitle = resolveTaskReference(progressMatch[1] || activeTaskTitle || "", activeTaskTitle);
+    const nextProgress = Number(progressMatch[2]);
+    if (taskTitle && Number.isFinite(nextProgress)) {
+      setTaskProgressValue(taskTitle, nextProgress);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `set ${taskTitle} to ${normalizeTaskProgress(nextProgress)}% complete.`
+      };
+    }
+  }
+
+  if (/(?:move this forward|make progress on this|push this forward|nudge this forward)/.test(normalized) && activeTaskTitle) {
+    advanceTaskProgress(activeTaskTitle, 10);
+    startTaskWorkSession(activeTaskTitle, { minutes: 30 });
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `moved ${activeTaskTitle} forward. progress is now ${getTaskProgressValue(readTaskEntry(activeTaskTitle))}% and the sprint is running.`
+    };
+  }
+
   const noteMatch = normalized.match(/(?:set|update|change|add)\s+(?:the\s+)?(?:working\s+)?notes?(?:\s+for\s+(?:this\s+task|the\s+task))?(?:\s+to|\s+with|\s+that\s+say)?\s+(.+)/);
   if (noteMatch && activeTaskTitle) {
     setTaskNotes(activeTaskTitle, noteMatch[1]);
-    renderTaskWorkspace();
-    renderStartupDashboard();
+    refreshTaskViews();
     return {
       handled: true,
       reply: "updated the working notes."
@@ -1451,8 +1768,7 @@ function maybeHandleLocalVoiceCommand(text) {
   const addSubtaskMatch = normalized.match(/(?:add|create)\s+(?:a\s+)?(?:subtask|step)(?:\s+called)?\s+(.+)/);
   if (addSubtaskMatch && activeTaskTitle) {
     addTaskSubtask(activeTaskTitle, addSubtaskMatch[1]);
-    renderTaskWorkspace();
-    renderStartupDashboard();
+    refreshTaskViews();
     return {
       handled: true,
       reply: `added ${normalizeTaskTitle(addSubtaskMatch[1])} as a step.`
@@ -1511,8 +1827,7 @@ function maybeHandleLocalVoiceCommand(text) {
       const entry = readTaskEntry(taskTitle);
       if (!entry.completed) {
         updateTaskEntry(taskTitle, (current) => ({ ...current, completed: true }));
-        renderTaskWorkspace();
-        renderStartupDashboard();
+        refreshTaskViews();
       }
       return {
         handled: true,
@@ -1534,8 +1849,7 @@ function maybeHandleLocalVoiceCommand(text) {
     const entry = readTaskEntry(doneTitle);
     if (!entry.completed) {
       updateTaskEntry(doneTitle, (current) => ({ ...current, completed: true }));
-      renderTaskWorkspace();
-      renderStartupDashboard();
+      refreshTaskViews();
     }
     return {
       handled: true,
@@ -2244,6 +2558,162 @@ function normalizeSubtaskList(rawList) {
     .slice(0, 40);
 }
 
+function normalizeTaskPriority(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["top", "highest", "urgent"].includes(normalized)) {
+    return "top";
+  }
+  if (normalized === "high") {
+    return "high";
+  }
+  if (normalized === "low") {
+    return "low";
+  }
+  return "normal";
+}
+
+function normalizeTaskFocusLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.includes("tonight")) {
+    return "tonight";
+  }
+  if (normalized.includes("today")) {
+    return "today";
+  }
+  if (normalized.includes("tomorrow")) {
+    return "tomorrow";
+  }
+  if (normalized.includes("this week")) {
+    return "this week";
+  }
+  return normalized.slice(0, 40);
+}
+
+function normalizeTaskWorkflowStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["active", "in progress", "working"].includes(normalized)) {
+    return "active";
+  }
+  if (["blocked", "stuck"].includes(normalized)) {
+    return "blocked";
+  }
+  if (["paused", "hold", "on hold"].includes(normalized)) {
+    return "paused";
+  }
+  if (["queued", "backlog", "idle"].includes(normalized)) {
+    return "queued";
+  }
+  if (["done", "complete", "completed", "finished"].includes(normalized)) {
+    return "done";
+  }
+  return "queued";
+}
+
+function normalizeTaskTextField(value, maxLength = 180) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function normalizeTaskProgress(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function formatTaskDueLabel(dueAt, dueLabel = "") {
+  const timestamp = Number(dueAt || 0) || 0;
+  if (!timestamp) {
+    return String(dueLabel || "").trim().toLowerCase();
+  }
+
+  const dueDate = new Date(timestamp);
+  const now = new Date();
+  const dueDay = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+  const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayDiff = Math.round((dueDay.getTime() - nowDay.getTime()) / 86400000);
+  const timeLabel = dueDate.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: dueDate.getMinutes() ? "2-digit" : undefined
+  });
+
+  if (dayDiff === 0) {
+    return `today ${timeLabel}`;
+  }
+  if (dayDiff === 1) {
+    return `tomorrow ${timeLabel}`;
+  }
+  if (dayDiff === -1) {
+    return `yesterday ${timeLabel}`;
+  }
+
+  const dateLabel = dueDate.toLocaleDateString([], {
+    month: "short",
+    day: "numeric"
+  });
+  return `${dateLabel} ${timeLabel}`;
+}
+
+function buildTaskOwnershipParts(entry) {
+  const parts = [];
+  const priority = normalizeTaskPriority(entry?.priority);
+  if (priority === "top") {
+    parts.push("top priority");
+  } else if (priority === "high") {
+    parts.push("high priority");
+  } else if (priority === "low") {
+    parts.push("low priority");
+  }
+
+  const focusLabel = normalizeTaskFocusLabel(entry?.focusLabel);
+  if (focusLabel) {
+    parts.push(`focus ${focusLabel}`);
+  }
+
+  const dueText = formatTaskDueLabel(entry?.dueAt, entry?.dueLabel);
+  if (dueText) {
+    parts.push(`due ${dueText}`);
+  }
+
+  return parts;
+}
+
+function buildTaskOwnershipSummary(entry) {
+  const parts = buildTaskOwnershipParts(entry);
+  if (parts.length) {
+    return `locked in: ${parts.join(" · ")}`;
+  }
+  return "give anna a real operating target like “work on this today”, “done by 5”, or “make this top priority.”";
+}
+
+function buildTaskExecutionParts(entry) {
+  const parts = [];
+  const workflowLabel = formatTaskWorkflowLabel(entry?.workflowStatus);
+  if (workflowLabel && workflowLabel !== "queued") {
+    parts.push(workflowLabel);
+  }
+  const progress = getTaskProgressValue(entry);
+  if (progress > 0) {
+    parts.push(`${progress}% complete`);
+  }
+  const nextAction = getTaskNextActionText(entry);
+  if (nextAction) {
+    parts.push(`next ${nextAction}`);
+  }
+  const blocker = normalizeTaskTextField(entry?.blocker || "", 180);
+  if (blocker) {
+    parts.push(`blocked by ${blocker}`);
+  }
+  const sprint = formatTaskSessionText(entry);
+  if (sprint !== "not running") {
+    parts.push(sprint);
+  }
+  return parts;
+}
+
 function readTaskEntry(title, userId = getCurrentUserId()) {
   const normalized = normalizeTaskTitle(title);
   const key = makeTaskKey(normalized);
@@ -2255,6 +2725,16 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     completed: Boolean(entry.completed),
     notes: String(entry.notes || ""),
     subtasks: normalizeSubtaskList(entry.subtasks),
+    priority: normalizeTaskPriority(entry.priority),
+    focusLabel: normalizeTaskFocusLabel(entry.focusLabel),
+    workflowStatus: normalizeTaskWorkflowStatus(entry.workflowStatus || (entry.completed ? "done" : "queued")),
+    nextAction: normalizeTaskTextField(entry.nextAction || "", 180),
+    blocker: normalizeTaskTextField(entry.blocker || "", 180),
+    progress: normalizeTaskProgress(entry.progress),
+    sessionStartedAt: Number(entry.sessionStartedAt || 0) || 0,
+    sessionEndsAt: Number(entry.sessionEndsAt || 0) || 0,
+    dueAt: Number(entry.dueAt || 0) || 0,
+    dueLabel: String(entry.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Number(entry.updatedAt || 0) || 0
   };
 }
@@ -2275,6 +2755,16 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     completed: Boolean(nextValue?.completed),
     notes: String(nextValue?.notes || ""),
     subtasks: normalizeSubtaskList(nextValue?.subtasks),
+    priority: normalizeTaskPriority(nextValue?.priority),
+    focusLabel: normalizeTaskFocusLabel(nextValue?.focusLabel),
+    workflowStatus: normalizeTaskWorkflowStatus(nextValue?.workflowStatus || (nextValue?.completed ? "done" : "queued")),
+    nextAction: normalizeTaskTextField(nextValue?.nextAction || "", 180),
+    blocker: normalizeTaskTextField(nextValue?.blocker || "", 180),
+    progress: normalizeTaskProgress(nextValue?.progress),
+    sessionStartedAt: Number(nextValue?.sessionStartedAt || 0) || 0,
+    sessionEndsAt: Number(nextValue?.sessionEndsAt || 0) || 0,
+    dueAt: Number(nextValue?.dueAt || 0) || 0,
+    dueLabel: String(nextValue?.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Date.now()
   };
 
@@ -2289,7 +2779,18 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
 function toggleTaskCompleted(title, userId = getCurrentUserId()) {
   return updateTaskEntry(
     title,
-    (current) => ({ ...current, completed: !current.completed }),
+    (current) => {
+      const nextCompleted = !current.completed;
+      return {
+        ...current,
+        completed: nextCompleted,
+        workflowStatus: nextCompleted ? "done" : "queued",
+        progress: nextCompleted ? 100 : Math.min(current.progress || 0, 95),
+        blocker: nextCompleted ? "" : current.blocker,
+        sessionStartedAt: 0,
+        sessionEndsAt: 0
+      };
+    },
     userId
   );
 }
@@ -2298,6 +2799,38 @@ function setTaskNotes(title, notes, userId = getCurrentUserId()) {
   return updateTaskEntry(
     title,
     (current) => ({ ...current, notes: String(notes || "") }),
+    userId
+  );
+}
+
+function setTaskOwnershipState(title, fields, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => ({
+      ...current,
+      ...fields,
+      priority: fields?.priority ?? current.priority,
+      focusLabel: fields?.focusLabel ?? current.focusLabel,
+      dueAt: fields?.dueAt ?? current.dueAt,
+      dueLabel: fields?.dueLabel ?? current.dueLabel
+    }),
+    userId
+  );
+}
+
+function setTaskExecutionState(title, fields, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => ({
+      ...current,
+      ...fields,
+      workflowStatus: fields?.workflowStatus ?? current.workflowStatus,
+      nextAction: fields?.nextAction ?? current.nextAction,
+      blocker: fields?.blocker ?? current.blocker,
+      progress: fields?.progress ?? current.progress,
+      sessionStartedAt: fields?.sessionStartedAt ?? current.sessionStartedAt,
+      sessionEndsAt: fields?.sessionEndsAt ?? current.sessionEndsAt
+    }),
     userId
   );
 }
@@ -2332,6 +2865,176 @@ function toggleTaskSubtask(title, subtaskId, userId = getCurrentUserId()) {
     }),
     userId
   );
+}
+
+function getTaskProgressValue(entry) {
+  if (entry?.completed) {
+    return 100;
+  }
+  const explicit = normalizeTaskProgress(entry?.progress);
+  const subtasks = Array.isArray(entry?.subtasks) ? entry.subtasks : [];
+  if (explicit > 0 || !subtasks.length) {
+    return explicit;
+  }
+  const completedCount = subtasks.filter((item) => item.completed).length;
+  return normalizeTaskProgress((completedCount / subtasks.length) * 100);
+}
+
+function getTaskNextActionText(entry) {
+  const explicit = normalizeTaskTextField(entry?.nextAction || "", 180);
+  if (explicit) {
+    return explicit;
+  }
+  const subtasks = Array.isArray(entry?.subtasks) ? entry.subtasks : [];
+  const open = subtasks.find((item) => !item.completed);
+  if (open?.title) {
+    return open.title;
+  }
+  if (String(entry?.notes || "").trim()) {
+    return "review the working notes and make the next move";
+  }
+  return "define the very next move";
+}
+
+function formatTaskWorkflowLabel(status) {
+  const normalized = normalizeTaskWorkflowStatus(status);
+  if (normalized === "active") {
+    return "working now";
+  }
+  if (normalized === "blocked") {
+    return "blocked";
+  }
+  if (normalized === "paused") {
+    return "paused";
+  }
+  if (normalized === "done") {
+    return "done";
+  }
+  return "queued";
+}
+
+function formatTaskSessionText(entry) {
+  const endsAt = Number(entry?.sessionEndsAt || 0) || 0;
+  if (!endsAt || normalizeTaskWorkflowStatus(entry?.workflowStatus) !== "active") {
+    return "not running";
+  }
+  return `locked until ${new Date(endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function startTaskWorkSession(title, options = {}, userId = getCurrentUserId()) {
+  const minutes = Math.max(10, Math.min(180, Number(options.minutes || 45) || 45));
+  const now = Date.now();
+  const current = readTaskEntry(title, userId);
+  return setTaskExecutionState(title, {
+    workflowStatus: current.completed ? "done" : "active",
+    blocker: "",
+    nextAction: normalizeTaskTextField(options.nextAction || current.nextAction || getTaskNextActionText(current), 180),
+    progress: current.completed ? 100 : Math.max(getTaskProgressValue(current), 5),
+    sessionStartedAt: now,
+    sessionEndsAt: current.completed ? 0 : now + minutes * 60 * 1000
+  }, userId);
+}
+
+function pauseTaskExecution(title, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  return setTaskExecutionState(title, {
+    workflowStatus: current.completed ? "done" : "paused",
+    sessionStartedAt: 0,
+    sessionEndsAt: 0
+  }, userId);
+}
+
+function blockTaskExecution(title, blocker, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  return setTaskExecutionState(title, {
+    workflowStatus: current.completed ? "done" : "blocked",
+    blocker: normalizeTaskTextField(blocker || current.blocker || "waiting on input", 180),
+    sessionStartedAt: 0,
+    sessionEndsAt: 0
+  }, userId);
+}
+
+function clearTaskBlocker(title, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  return setTaskExecutionState(title, {
+    blocker: "",
+    workflowStatus: current.completed ? "done" : current.sessionEndsAt > Date.now() ? "active" : "queued"
+  }, userId);
+}
+
+function setTaskNextAction(title, nextAction, userId = getCurrentUserId()) {
+  return setTaskExecutionState(title, {
+    nextAction: normalizeTaskTextField(nextAction, 180)
+  }, userId);
+}
+
+function setTaskProgressValue(title, progress, userId = getCurrentUserId()) {
+  const nextProgress = normalizeTaskProgress(progress);
+  return setTaskExecutionState(title, {
+    progress: nextProgress,
+    completed: nextProgress >= 100,
+    workflowStatus: nextProgress >= 100 ? "done" : readTaskEntry(title, userId).workflowStatus
+  }, userId);
+}
+
+function advanceTaskProgress(title, delta = 10, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  const nextProgress = normalizeTaskProgress(getTaskProgressValue(current) + Number(delta || 0));
+  return setTaskExecutionState(title, {
+    progress: nextProgress,
+    completed: nextProgress >= 100,
+    workflowStatus: nextProgress >= 100 ? "done" : current.workflowStatus === "blocked" ? "active" : current.workflowStatus || "active"
+  }, userId);
+}
+
+function completeNextOpenSubtask(title, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  const open = current.subtasks.find((item) => !item.completed);
+  if (!open) {
+    return { changed: false, title: "" };
+  }
+
+  const nextSubtasks = current.subtasks.map((item) => item.id === open.id ? { ...item, completed: true } : item);
+  const remaining = nextSubtasks.filter((item) => !item.completed);
+  updateTaskEntry(title, (entry) => ({
+    ...entry,
+    subtasks: nextSubtasks,
+    nextAction: remaining[0]?.title || "",
+    progress: remaining.length ? normalizeTaskProgress(((nextSubtasks.length - remaining.length) / nextSubtasks.length) * 100) : 100,
+    completed: remaining.length === 0 && nextSubtasks.length > 0,
+    workflowStatus: remaining.length === 0 && nextSubtasks.length > 0 ? "done" : "active",
+    sessionStartedAt: remaining.length === 0 ? 0 : entry.sessionStartedAt,
+    sessionEndsAt: remaining.length === 0 ? 0 : entry.sessionEndsAt
+  }), userId);
+  return { changed: true, title: open.title, remaining: remaining.length };
+}
+
+function buildLocalTaskExecutionPlan(title, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  const normalizedTitle = normalizeTaskTitle(title);
+  const plan = [
+    `define the finish line for ${normalizedTitle}`,
+    `do the first real pass on ${normalizedTitle}`,
+    `review, tighten, and ship ${normalizedTitle}`
+  ];
+  const existing = new Set(current.subtasks.map((item) => normalizeTaskTitle(item.title)).filter(Boolean));
+  let added = 0;
+  plan.forEach((item) => {
+    if (existing.has(item)) {
+      return;
+    }
+    addTaskSubtask(normalizedTitle, item, userId);
+    existing.add(item);
+    added += 1;
+  });
+  if (added) {
+    setTaskExecutionState(normalizedTitle, {
+      workflowStatus: current.completed ? "done" : "queued",
+      nextAction: current.nextAction || plan[0],
+      progress: current.progress || getTaskProgressValue(current)
+    }, userId);
+  }
+  return added;
 }
 
 function getSubscriptionLabel(value) {
@@ -2700,6 +3403,14 @@ function buildTaskBoardContext(userId = getCurrentUserId(), limit = 18) {
       const pieces = [`${entry.completed ? "[done]" : "[todo]"} ${entry.title}`];
       const note = String(entry.notes || "").trim();
       const subtasks = Array.isArray(entry.subtasks) ? entry.subtasks : [];
+      const ownership = buildTaskOwnershipParts(entry);
+      const execution = buildTaskExecutionParts(entry);
+      if (ownership.length) {
+        pieces.push(ownership.join(", "));
+      }
+      if (execution.length) {
+        pieces.push(execution.join(", "));
+      }
       if (subtasks.length) {
         const completedCount = subtasks.filter((item) => item.completed).length;
         pieces.push(`subtasks ${completedCount}/${subtasks.length}`);
@@ -2841,7 +3552,7 @@ function buildMessagesForApi() {
   if (getCurrentPageLabel() === "task") {
     sysParts.push("the user is currently inside the task workspace for the active task above. default to helping with that task and do not ask which task they mean unless they explicitly name a different one.");
     sysParts.push("for task help, keep replies short by default, usually 1 to 3 sentences or a tight bullet list. only go long when the user asks for detail or the problem genuinely needs it.");
-    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save a working note, include a line that starts with 'notes:' followed by the note.");
+    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', or 'progress:' and the app will save them.");
   }
   sysParts.push("for normal conversation, keep replies tight by default: usually 1 to 3 short sentences unless the user explicitly asks for depth.");
   sysParts.push("if the user greets you or checks in without giving direction, respond proactively using their current task board or to-do list. suggest 1 to 3 concrete next moves or ask them to pick one. do not give a generic greeting with no direction.");
@@ -2849,7 +3560,7 @@ function buildMessagesForApi() {
     sysParts.push("current startup to-do list:\n" + startupTaskLines);
   }
   if (taskBoardContext) {
-    sysParts.push("full saved task board with completion state, subtasks, and notes:\n" + taskBoardContext);
+    sysParts.push("full saved task board with completion state, operator state, subtasks, and notes:\n" + taskBoardContext);
   }
   if (activeTaskNotes) {
     sysParts.push(`active task notes:\n${activeTaskNotes.slice(0, 900)}`);
@@ -3121,6 +3832,32 @@ function maybeApplyTaskWorkspaceSuggestionsFromAnna(text) {
     }
   }
 
+  const nextMatch = String(text || "").match(/(?:^|\n)next:\s*(.{1,180})/i);
+  const nextText = normalizeTaskTextField(nextMatch?.[1] || "", 180);
+  if (nextText && nextText !== readTaskEntry(activeTitle).nextAction) {
+    setTaskNextAction(activeTitle, nextText);
+    changed = true;
+  }
+
+  const blockerMatch = String(text || "").match(/(?:^|\n)blocker:\s*(.{1,180})/i);
+  const blockerText = normalizeTaskTextField(blockerMatch?.[1] || "", 180);
+  if (blockerText && blockerText !== readTaskEntry(activeTitle).blocker) {
+    blockTaskExecution(activeTitle, blockerText);
+    changed = true;
+  }
+
+  const statusMatch = String(text || "").match(/(?:^|\n)status:\s*(active|blocked|paused|queued|done)/i);
+  const progressMatch = String(text || "").match(/(?:^|\n)progress:\s*(\d{1,3})\s*%?/i);
+  if (statusMatch || progressMatch) {
+    const current = readTaskEntry(activeTitle);
+    setTaskExecutionState(activeTitle, {
+      workflowStatus: statusMatch ? normalizeTaskWorkflowStatus(statusMatch[1]) : current.workflowStatus,
+      progress: progressMatch ? normalizeTaskProgress(progressMatch[1]) : current.progress,
+      completed: statusMatch ? normalizeTaskWorkflowStatus(statusMatch[1]) === "done" : current.completed
+    });
+    changed = true;
+  }
+
   if (changed) {
     renderTaskWorkspace();
     renderStartupDashboard();
@@ -3227,10 +3964,24 @@ function renderStartupDashboard() {
     const row = document.createElement("div");
     row.className = `startup-task${state.completed ? " is-complete" : ""}`;
 
+    const main = document.createElement("div");
+    main.className = "startup-task-main";
+
     const a = createTaskLink(title, "startup-task-title");
+    main.appendChild(a);
+
+    const ownership = buildTaskOwnershipParts(state);
+    const execution = buildTaskExecutionParts(state).filter((item) => !item.startsWith("next "));
+    const metaParts = [...ownership, ...execution].slice(0, 3);
+    if (metaParts.length) {
+      const meta = document.createElement("div");
+      meta.className = "startup-task-meta";
+      meta.textContent = metaParts.join(" · ");
+      main.appendChild(meta);
+    }
 
     const check = createTaskCheckButton(title, "startup-task-check", () => renderStartupDashboard());
-    row.appendChild(a);
+    row.appendChild(main);
     row.appendChild(check);
     startupTasksEl.appendChild(row);
   });
@@ -3327,6 +4078,34 @@ function renderTaskWorkspace() {
     if (taskPageStatus) {
       taskPageStatus.textContent = "ask anna for a to do list first";
     }
+    if (taskOwnerSummary) {
+      taskOwnerSummary.textContent = "pick a task, then give anna a real target for it.";
+    }
+    if (taskOwnerChips) {
+      taskOwnerChips.innerHTML = "";
+    }
+    if (taskWorkflowBadge) {
+      taskWorkflowBadge.textContent = "queued";
+      taskWorkflowBadge.dataset.status = "queued";
+    }
+    if (taskProgressText) {
+      taskProgressText.textContent = "0%";
+    }
+    if (taskProgressFill) {
+      taskProgressFill.style.width = "0%";
+    }
+    if (taskNextActionText) {
+      taskNextActionText.textContent = "pick a task to load the next move";
+    }
+    if (taskBlockerText) {
+      taskBlockerText.textContent = "none";
+    }
+    if (taskSessionText) {
+      taskSessionText.textContent = "not running";
+    }
+    [taskStartNowButton, taskFinishStepButton, taskPauseButton, taskUnblockButton, taskPlanButton].forEach((button) => {
+      if (button) button.disabled = true;
+    });
     if (taskNotesInput) {
       taskNotesInput.value = "";
       taskNotesInput.disabled = true;
@@ -3355,12 +4134,63 @@ function renderTaskWorkspace() {
   const subtaskStatus = state.subtasks.length
     ? `${completedSubtasks}/${state.subtasks.length} subtasks done`
     : "no subtasks yet";
+  const workflowStatus = normalizeTaskWorkflowStatus(state.workflowStatus || (state.completed ? "done" : "queued"));
+  const progress = getTaskProgressValue(state);
+  const nextAction = getTaskNextActionText(state);
 
   if (taskPageTitle) {
     taskPageTitle.textContent = title;
   }
   if (taskPageStatus) {
-    taskPageStatus.textContent = `${state.completed ? "done" : "in progress"} · ${subtaskStatus}`;
+    taskPageStatus.textContent = `${formatTaskWorkflowLabel(workflowStatus)} · ${subtaskStatus}`;
+  }
+  if (taskOwnerSummary) {
+    const ownerSummary = buildTaskOwnershipSummary(state);
+    const executionSummary = buildTaskExecutionParts(state).slice(0, 2).join(" · ");
+    taskOwnerSummary.textContent = executionSummary ? `${ownerSummary} · ${executionSummary}` : ownerSummary;
+  }
+  if (taskOwnerChips) {
+    taskOwnerChips.innerHTML = "";
+    [...buildTaskOwnershipParts(state), ...buildTaskExecutionParts(state).filter((item) => !item.startsWith("next "))].slice(0, 6).forEach((labelText) => {
+      const chip = document.createElement("div");
+      chip.className = "task-owner-chip";
+      chip.textContent = labelText;
+      taskOwnerChips.appendChild(chip);
+    });
+  }
+  if (taskWorkflowBadge) {
+    taskWorkflowBadge.textContent = formatTaskWorkflowLabel(workflowStatus);
+    taskWorkflowBadge.dataset.status = workflowStatus;
+  }
+  if (taskProgressText) {
+    taskProgressText.textContent = `${progress}%`;
+  }
+  if (taskProgressFill) {
+    taskProgressFill.style.width = `${progress}%`;
+  }
+  if (taskNextActionText) {
+    taskNextActionText.textContent = nextAction;
+  }
+  if (taskBlockerText) {
+    taskBlockerText.textContent = state.blocker || "none";
+  }
+  if (taskSessionText) {
+    taskSessionText.textContent = formatTaskSessionText(state);
+  }
+  if (taskStartNowButton) {
+    taskStartNowButton.disabled = state.completed;
+  }
+  if (taskFinishStepButton) {
+    taskFinishStepButton.disabled = state.completed || !state.subtasks.some((item) => !item.completed);
+  }
+  if (taskPauseButton) {
+    taskPauseButton.disabled = state.completed || workflowStatus === "paused" || workflowStatus === "queued";
+  }
+  if (taskUnblockButton) {
+    taskUnblockButton.disabled = !state.blocker;
+  }
+  if (taskPlanButton) {
+    taskPlanButton.disabled = state.completed;
   }
   if (taskDoneToggle) {
     taskDoneToggle.disabled = false;
@@ -5225,6 +6055,56 @@ taskSubtaskInput?.addEventListener("keydown", (event) => {
   }
   event.preventDefault();
   addCurrentTaskSubtask();
+});
+
+taskStartNowButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  startTaskWorkSession(title, { minutes: 45 });
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskFinishStepButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  completeNextOpenSubtask(title);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskPauseButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  pauseTaskExecution(title);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskUnblockButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  clearTaskBlocker(title);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskPlanButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  buildLocalTaskExecutionPlan(title);
+  renderStartupDashboard();
+  renderTaskWorkspace();
 });
 
 // startup dashboard is driven by real lists captured from anna replies.
