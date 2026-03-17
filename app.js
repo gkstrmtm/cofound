@@ -310,6 +310,24 @@ function submitRecognizedUserText(text) {
     return;
   }
 
+  const preparedRequest = maybePrepareTaskBoardForUserRequest(normalized);
+  if (preparedRequest?.handled) {
+    pushEntry("user", normalized);
+    appendToMemory("user", normalized);
+    if (persistentListeningEnabled) {
+      pauseListeningForReply();
+    }
+    if (preparedRequest.reply) {
+      pushEntry("ai", preparedRequest.reply);
+      appendToMemory("assistant", preparedRequest.reply);
+      if (isVoiceOutputEnabled()) {
+        enqueueElevenLabsTts(preparedRequest.reply);
+      }
+    }
+    maybeResumeListeningAfterReply();
+    return;
+  }
+
   const localCommand = maybeHandleLocalVoiceCommand(normalized);
   if (localCommand?.handled) {
     pushEntry("user", normalized);
@@ -518,6 +536,81 @@ function isBulkTaskDoneIntent(text) {
   const wantsCompletion = /(?:done|finished|complete|completed)/.test(normalized);
   const targetsAll = /\b(all|every|everything)\b/.test(normalized) && /\b(task|tasks|todo|to do|board|list)\b/.test(normalized);
   return wantsCompletion && targetsAll;
+}
+
+function mentionsTodoList(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (/\b(todo|to do|checklist|task list|task board|list)\b/.test(normalized)) {
+    return true;
+  }
+  return Boolean(getLatestStartupItems().length) && /\b(current|existing|old)\s+(?:one|list)\b/.test(normalized);
+}
+
+function wantsNewTodoList(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized || !mentionsTodoList(normalized)) {
+    return false;
+  }
+  return /\b(new|fresh|another)\b/.test(normalized) || /\b(make|create|build|generate|draft|write|give)\b(?:[\s\S]{0,24})\b(?:one|list|todo|to do|checklist)\b/.test(normalized);
+}
+
+function wantsClearTodoList(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized || !mentionsTodoList(normalized)) {
+    return false;
+  }
+  return /get rid of|start over|replace|clear|remove|delete|wipe|reset|archive/.test(normalized);
+}
+
+function clearCurrentStartupList(options = {}) {
+  const userId = getCurrentUserId();
+  const currentItems = getLatestStartupItems(userId).map((item) => normalizeTaskTitle(item)).filter(Boolean);
+  if (!currentItems.length) {
+    return 0;
+  }
+
+  const shouldMarkCompleted = options.markCompleted !== false;
+  if (shouldMarkCompleted) {
+    currentItems.forEach((title) => {
+      updateTaskEntry(title, (current) => ({ ...current, completed: true }), userId);
+    });
+  }
+
+  const activeTitle = readActiveTaskContext()?.title || "";
+  if (activeTitle && currentItems.includes(activeTitle)) {
+    setActiveTaskContext("");
+  }
+
+  const log = readStartupLists();
+  const next = [...log, { title: "to do", items: [], ts: Date.now(), userId }].slice(-80);
+  writeStartupLists(next);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+  return currentItems.length;
+}
+
+function maybePrepareTaskBoardForUserRequest(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized || !wantsClearTodoList(normalized)) {
+    return { continueToModel: true };
+  }
+
+  const clearedCount = clearCurrentStartupList({
+    markCompleted: /\b(done|finished|completed)\b/.test(normalized) || !/\bkeep\b/.test(normalized)
+  });
+
+  if (wantsNewTodoList(normalized)) {
+    return {
+      continueToModel: true,
+      clearedCount
+    };
+  }
+
+  return {
+    continueToModel: false,
+    handled: true,
+    reply: clearedCount ? "cleared your current to-do list." : "you don't have a current to-do list to clear."
+  };
 }
 
 function maybeHandleLocalVoiceCommand(text) {
@@ -1845,6 +1938,7 @@ function buildMessagesForApi() {
   }
   sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
   sysParts.push("if the user asks what is on the to-do list, what they were working on, or what happened earlier, answer directly from the saved task board, notes, and chat history above. do not ask them to repeat information that is already present.");
+  sysParts.push("if the user asks you to make, replace, refresh, or create a to-do list or checklist, answer with a real bullet or numbered list of tasks so the app can save it as the active checklist. do not just describe a list in prose.");
   sysParts.push("match the depth to the ask: casual when the user wants quick help, but go deep when they want to build, diagnose, or decide something important.");
   sysParts.push("when going deep, think like a real cofounder: define the problem, state a point of view, show tradeoffs, and turn the answer into concrete priorities, experiments, or next moves.");
   sysParts.push("for deeper business answers, naturally cover what is happening, what you recommend, and what the user should do next, but do not force obvious section labels unless they improve readability.");
@@ -4269,6 +4363,17 @@ function sendTypedToAnna(rawText) {
     setInlineVoiceTrayOpen(true);
   }
   if (!ensureSignedIn()) {
+    return;
+  }
+
+  const preparedRequest = maybePrepareTaskBoardForUserRequest(lower);
+  if (preparedRequest?.handled) {
+    pushEntry("user", lower);
+    appendToMemory("user", lower);
+    if (preparedRequest.reply) {
+      pushEntry("ai", preparedRequest.reply);
+      appendToMemory("assistant", preparedRequest.reply);
+    }
     return;
   }
 
