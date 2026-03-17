@@ -190,6 +190,7 @@ let ttsQueue = [];
 let ttsIsPlaying = false;
 let ttsCurrentAudio = null;
 let ttsCurrentUrl = null;
+let ttsCurrentText = "";
 let ttsAudioEl = null;
 let ttsFetchInFlight = 0;
 let annaReplyInFlight = false;
@@ -651,6 +652,58 @@ function normalizeBufferedSpeechParts(parts) {
     .trim();
 }
 
+function countMeaningfulSpeechWords(text) {
+  return normalizeBufferedSpeechParts([text])
+    .split(/\s+/)
+    .filter((word) => /[a-z0-9]/i.test(word))
+    .length;
+}
+
+function isMeaningfulSpeechPhrase(text, options = {}) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized) {
+    return false;
+  }
+
+  const words = normalized.split(/\s+/).filter((word) => /[a-z0-9]/i.test(word));
+  if (!words.length) {
+    return false;
+  }
+
+  if (words.length >= 2) {
+    return true;
+  }
+
+  if (options.allowSingleWord && words[0].length >= 4) {
+    return true;
+  }
+
+  return normalized.length >= 12;
+}
+
+function isLikelyCurrentAnnaSpeech(text) {
+  const heard = normalizeBufferedSpeechParts([text]);
+  const current = normalizeBufferedSpeechParts([ttsCurrentText]);
+  if (!heard || !current || heard.length < 8) {
+    return false;
+  }
+  return current.includes(heard) || heard.includes(current);
+}
+
+function shouldInterruptTtsPlayback(interim, finalizedParts = []) {
+  const finalText = normalizeBufferedSpeechParts(finalizedParts);
+  if (isMeaningfulSpeechPhrase(finalText, { allowSingleWord: true }) && !isLikelyCurrentAnnaSpeech(finalText)) {
+    return true;
+  }
+
+  const interimText = normalizeBufferedSpeechParts([interim]);
+  if (isMeaningfulSpeechPhrase(interimText) && countMeaningfulSpeechWords(interimText) >= 2 && !isLikelyCurrentAnnaSpeech(interimText)) {
+    return true;
+  }
+
+  return false;
+}
+
 function submitRecognizedUserText(text) {
   const normalized = String(text || "").trim().toLowerCase();
   if (!normalized) {
@@ -784,7 +837,7 @@ function shouldUseInlineVoiceMode() {
 }
 
 function shouldUseWakeWordMode() {
-  return false;
+  return shouldUseInlineVoiceMode();
 }
 
 function markVoiceActivationUnlocked() {
@@ -907,6 +960,9 @@ function mentionsTodoList(text) {
   if (/\b(?:to\s*do|todo|to-do|checklist|task list|task board|to do list|todo list|to-do list)\b/.test(normalized)) {
     return true;
   }
+  if (Boolean(getLatestStartupItems().length) && /\b(?:my|the|current|existing)\s+list\b/.test(normalized)) {
+    return true;
+  }
   return Boolean(getLatestStartupItems().length) && /\b(current|existing|old)\s+(?:to\s*do|todo|to-do|checklist|task list|task board|one)\b/.test(normalized);
 }
 
@@ -931,7 +987,7 @@ function wantsShowTodoList(text) {
   if (!normalized || !mentionsTodoList(normalized)) {
     return false;
   }
-  return /\b(show|open|pull up|bring up|display|see|view|check)\b/.test(normalized) || /what(?:'s| is) on/.test(normalized);
+  return /\b(show|open|display|see|view|check)\b/.test(normalized) || /\b(?:pull|bring|pop)\b(?:[\s\S]{0,12})\bup\b/.test(normalized) || /what(?:'s| is) on/.test(normalized);
 }
 
 function openCurrentTodoListSheet() {
@@ -2264,16 +2320,26 @@ function appendToMemory(role, content) {
 }
 
 function formatRelativeTime(msAgo) {
-  const sec = Math.max(0, Math.round(msAgo / 1000));
-  if (sec < 90) return "just now";
-  const min = Math.round(sec / 60);
-  if (min < 90) return `${min} minutes ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 36) return `${hr} hours ago`;
-  const day = Math.round(hr / 24);
-  if (day < 10) return `${day} days ago`;
-  const wk = Math.round(day / 7);
-  return `${wk} weeks ago`;
+  const sec = Math.max(0, Math.floor(msAgo / 1000));
+  if (sec < 60) return "just now";
+
+  const min = Math.floor(sec / 60);
+  if (min < 60) {
+    return `${min} minute${min === 1 ? "" : "s"} ago`;
+  }
+
+  const hr = Math.floor(min / 60);
+  if (hr < 24) {
+    return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  }
+
+  const day = Math.floor(hr / 24);
+  if (day < 7) {
+    return `${day} day${day === 1 ? "" : "s"} ago`;
+  }
+
+  const wk = Math.floor(day / 7);
+  return `${wk} week${wk === 1 ? "" : "s"} ago`;
 }
 
 function buildMessagesForApi() {
@@ -3109,9 +3175,11 @@ function unlockAudioFromGesture() {
   // HTMLAudio unlock (also helps on mobile)
   try {
     const a = ensureTtsAudioElement();
-    const previousSrc = a.currentSrc || a.src || "";
     const previousVolume = a.volume;
     routeTtsAudioToSystemOutput(a);
+    a.pause();
+    a.removeAttribute("src");
+    a.load();
     a.src = SILENT_WAV_DATA_URI;
     a.load();
     a.volume = 0;
@@ -3127,9 +3195,6 @@ function unlockAudioFromGesture() {
         a.removeAttribute("src");
         a.load();
         a.volume = previousVolume;
-        if (previousSrc) {
-          a.src = previousSrc;
-        }
       } catch {
         // ignore
       }
@@ -3155,6 +3220,13 @@ function primeAudioUnlockOnFirstGesture() {
   document.addEventListener("pointerdown", once, true);
   document.addEventListener("touchstart", once, true);
   document.addEventListener("click", once, true);
+}
+
+function retryPendingAudioUnlockFromGesture() {
+  if (!ttsNeedsUnlock) {
+    return;
+  }
+  unlockAudioFromGesture();
 }
 
 function getVoiceRepliesEnabled() {
@@ -3359,6 +3431,7 @@ function stopAllTts() {
   ttsFetchInFlight = 0;
   ttsNeedsUnlock = false;
   ttsFetchChain = Promise.resolve();
+  ttsCurrentText = "";
 
   if (ttsCurrentAudio) {
     try {
@@ -3392,7 +3465,7 @@ function playNextTts() {
   if (!next) {
     return;
   }
-  const { url, sessionId } = next;
+  const { url, sessionId, text } = next;
   if (sessionId !== ttsSessionId) {
     if (url) {
       try {
@@ -3406,6 +3479,7 @@ function playNextTts() {
 
   ttsIsPlaying = true;
   ttsCurrentUrl = url;
+  ttsCurrentText = String(text || "").trim();
   const audio = ensureTtsAudioElement();
   routeTtsAudioToSystemOutput(audio);
   audio.pause();
@@ -3421,6 +3495,7 @@ function playNextTts() {
   audio.onended = () => {
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
+    ttsCurrentText = "";
     if (ttsCurrentUrl) {
       try {
         URL.revokeObjectURL(ttsCurrentUrl);
@@ -3436,6 +3511,7 @@ function playNextTts() {
   audio.onerror = () => {
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
+    ttsCurrentText = "";
     setAudioNotice("anna couldn't play that voice reply. try again in a second.");
     if (ttsCurrentUrl) {
       try {
@@ -3452,12 +3528,20 @@ function playNextTts() {
   audio.play().catch(() => {
     // Likely autoplay policy. Keep this chunk and retry after unlock.
     console.warn("anna tts play() was blocked; waiting for next user gesture to retry audio");
-    setAudioNotice("voice is ready. tap once and anna will speak normally.");
+    setAudioNotice("voice is ready. tap anywhere once and anna will speak normally.");
     ttsNeedsUnlock = true;
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
+    ttsCurrentText = "";
+    try {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    } catch {
+      // ignore
+    }
     if (ttsCurrentUrl) {
-      ttsQueue.unshift({ url: ttsCurrentUrl, sessionId });
+      ttsQueue.unshift({ url: ttsCurrentUrl, sessionId, text });
     }
     ttsCurrentUrl = null;
   });
@@ -3512,7 +3596,7 @@ async function enqueueElevenLabsTts(text, voiceIdOverride) {
         return;
       }
       const url = URL.createObjectURL(blob);
-      ttsQueue.push({ url, sessionId: mySession });
+      ttsQueue.push({ url, sessionId: mySession, text: cleaned });
       playNextTts();
     })
     .catch((err) => {
@@ -4083,17 +4167,17 @@ function ensureSpeechRecognizer() {
 
     const nextInterim = normalizeBufferedSpeechParts(interimParts);
 
-    if ((nextInterim || finalizedParts.length) && (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0)) {
-      stopAllTts();
-      clearAudioNotice();
-    }
-
     if (finalizedParts.length) {
       finalSpeechBuffer = normalizeBufferedSpeechParts([finalSpeechBuffer, ...finalizedParts]);
     }
 
     interimText = nextInterim;
     setInterim(nextInterim);
+
+    if (shouldInterruptTtsPlayback(nextInterim, finalizedParts) && (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0)) {
+      stopAllTts();
+      clearAudioNotice();
+    }
 
     if (finalSpeechBuffer) {
       scheduleBufferedSpeechCommit();
@@ -5146,6 +5230,8 @@ accountSave?.addEventListener("click", () => {
 initBrandLogoImages();
 syncTaskContextFromUrl();
 primeAudioUnlockOnFirstGesture();
+document.addEventListener("pointerdown", retryPendingAudioUnlockFromGesture, true);
+document.addEventListener("touchstart", retryPendingAudioUnlockFromGesture, true);
 setVoiceRepliesEnabled(getVoiceRepliesEnabled());
 renderVoiceSetting();
 renderVolumeUi();

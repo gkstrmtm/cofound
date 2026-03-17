@@ -73,6 +73,17 @@
           <div class="startup-tasks" id="startupTasks" role="list" aria-label="tasks"></div>
         </section>
 
+        <section class="bottom-sheet" id="listSheet" aria-hidden="true">
+          <button class="sheet-scrim" id="listSheetScrim" type="button" aria-label="close"></button>
+          <div class="sheet-panel" role="dialog" aria-label="anna list">
+            <div class="sheet-header">
+              <div class="sheet-title" id="listSheetTitle">to do</div>
+              <button class="sheet-close" id="listSheetClose" type="button" aria-label="close">×</button>
+            </div>
+            <div class="sheet-body" id="listSheetBody"></div>
+          </div>
+        </section>
+
         <section class="modal" id="authModal" aria-hidden="true">
           <button class="modal-scrim" type="button" data-modal-close aria-label="close"></button>
           <div class="modal-panel" role="dialog" aria-label="auth">
