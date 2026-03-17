@@ -432,15 +432,22 @@ async function startRecordedVoiceCapture() {
     recorder.onstop = async () => {
       const chunks = mediaRecorderChunks.slice();
       const mimeType = mediaRecorderMimeType || recorder.mimeType || "audio/webm";
+      const keepSessionAlive = persistentListeningEnabled;
       cleanupRecordedVoiceCapture();
       isListeningNow = false;
-      persistentListeningEnabled = false;
-      pendingResumeListening = false;
-      singleTurnVoiceMode = false;
+      if (!keepSessionAlive) {
+        pendingResumeListening = false;
+        singleTurnVoiceMode = false;
+      }
       updateListeningUi();
 
       if (!chunks.length) {
-        showSpeechStatus("anna didn't hear anything. try again and speak right away.", 3200);
+        if (keepSessionAlive) {
+          showSpeechStatus("anna didn't hear anything. still listening.", 2200);
+          resumePersistentListeningSoon(220);
+        } else {
+          showSpeechStatus("anna didn't hear anything. try again and speak right away.", 3200);
+        }
         return;
       }
 
@@ -1068,7 +1075,10 @@ function startWakeWordMonitoring() {
 
 function resumePersistentListeningSoon(delay = 140) {
   window.setTimeout(() => {
-    if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow || !speechRecognizer) {
+    if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow) {
+      return;
+    }
+    if (!speechRecognizer && !hasRecordedVoiceFallback()) {
       return;
     }
     setListening(true);
@@ -1108,6 +1118,7 @@ function pauseListeningForReply() {
   interimText = "";
   setInterim("");
   updateListeningUi();
+  stopRecordedVoiceCapture();
   stopSpeechRecognizer();
 }
 
