@@ -162,6 +162,7 @@ let singleTurnVoiceMode = false;
 let wakeWordRecognizer = null;
 let wakeWordListeningNow = false;
 let passiveWakeWordEnabled = false;
+let voiceActivationUnlocked = false;
 let wakeWordRestartTimer = null;
 let wakeWordDetectedAt = 0;
 let wakeWordRecentTranscript = "";
@@ -451,6 +452,10 @@ function shouldUseWakeWordMode() {
   return Boolean(inlineVoiceButton && inlineVoiceList && !recordButton);
 }
 
+function markVoiceActivationUnlocked() {
+  voiceActivationUnlocked = true;
+}
+
 function stopWakeWordListeningSession() {
   clearWakeWordRestart();
   wakeWordRecentTranscript = "";
@@ -481,7 +486,7 @@ function heardWakeWord(text) {
 }
 
 function scheduleWakeWordRestart(delay = 450) {
-  if (!passiveWakeWordEnabled || !shouldUseWakeWordMode()) {
+  if (!passiveWakeWordEnabled || !voiceActivationUnlocked || !shouldUseWakeWordMode()) {
     return;
   }
   clearWakeWordRestart();
@@ -493,6 +498,9 @@ function scheduleWakeWordRestart(delay = 450) {
 function startInlineVoiceCapture(source = "tap") {
   if (!shouldUseWakeWordMode()) {
     return;
+  }
+  if (source === "tap") {
+    markVoiceActivationUnlocked();
   }
   unlockAudioFromGesture();
   const isStopping = persistentListeningEnabled || isListeningNow;
@@ -769,6 +777,10 @@ function ensureWakeWordRecognizer() {
 
 function startWakeWordMonitoring() {
   if (!shouldUseWakeWordMode()) {
+    return;
+  }
+  if (!voiceActivationUnlocked) {
+    passiveWakeWordEnabled = true;
     return;
   }
   passiveWakeWordEnabled = true;
@@ -2810,6 +2822,7 @@ async function getMicrophonePermissionState() {
 }
 
 function retryVoiceCaptureFromGesture() {
+  markVoiceActivationUnlocked();
   unlockAudioFromGesture();
   clearAudioNotice();
 
