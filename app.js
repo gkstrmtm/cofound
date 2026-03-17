@@ -288,10 +288,22 @@ function showInlineVoiceStatus(message, delay = 2600, options = {}) {
   scheduleInlineVoiceTrayHide(delay);
 }
 
+function clearInlineVoiceStatus(options = {}) {
+  if (!inlineVoiceList) {
+    return;
+  }
+  clearInlineVoiceHideTimer();
+  inlineVoiceList.innerHTML = "";
+  if (options.hide !== false) {
+    setInlineVoiceTrayOpen(false);
+  }
+}
+
 function showSpeechStatus(message, delay = 2600, options = {}) {
   const text = String(message || "").trim().toLowerCase();
   if (!text) {
     clearAudioNotice();
+    clearInlineVoiceStatus();
     return;
   }
   if (transcriptList) {
@@ -553,7 +565,9 @@ function stopRecordedVoiceCapture(autoStopped = false) {
     return false;
   }
   clearMediaRecorderStopTimer();
-  showSpeechStatus("thinking", 12000, { state: "thinking" });
+  if (autoStopped || pendingResumeListening) {
+    showSpeechStatus("thinking", 12000, { state: "thinking" });
+  }
   try {
     mediaRecorder.stop();
     return true;
@@ -991,7 +1005,7 @@ function wantsShowTodoList(text) {
 }
 
 function openCurrentTodoListSheet() {
-  const latest = getLatestStartupListForUser();
+  const latest = getLatestNonEmptyStartupListForUser() || getLatestStartupListForUser();
   const items = Array.isArray(latest?.items) ? latest.items.map((item) => normalizeTaskTitle(item)).filter(Boolean) : [];
   if (!items.length || !listSheetBody || !listSheetTitle) {
     return false;
@@ -1245,6 +1259,9 @@ function maybeResumeListeningAfterReply() {
     return;
   }
   if (annaReplyInFlight) {
+    return;
+  }
+  if (isVoiceOutputEnabled() && (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0 || ttsNeedsUnlock)) {
     return;
   }
   if (singleTurnVoiceMode) {
@@ -1926,6 +1943,17 @@ function getSubscriptionLabel(value) {
 function getLatestStartupListForUser(userId = getCurrentUserId()) {
   const lists = readStartupLists().filter((l) => String(l?.userId || "") === userId);
   return lists.length ? lists[lists.length - 1] : null;
+}
+
+function getLatestNonEmptyStartupListForUser(userId = getCurrentUserId()) {
+  const lists = readStartupLists().filter((l) => String(l?.userId || "") === userId);
+  for (let i = lists.length - 1; i >= 0; i -= 1) {
+    const items = Array.isArray(lists[i]?.items) ? lists[i].items.map((item) => normalizeTaskTitle(item)).filter(Boolean) : [];
+    if (items.length) {
+      return lists[i];
+    }
+  }
+  return null;
 }
 
 function getLatestStartupItems(userId = getCurrentUserId()) {
@@ -4324,6 +4352,8 @@ function setListening(isListening) {
 
   interimText = "";
   setInterim("");
+  clearAudioNotice();
+  clearInlineVoiceStatus();
   if (stopRecordedVoiceCapture()) {
     return;
   }
