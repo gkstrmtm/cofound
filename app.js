@@ -32,11 +32,16 @@ const taskProgressFill = document.getElementById("taskProgressFill");
 const taskNextActionText = document.getElementById("taskNextActionText");
 const taskBlockerText = document.getElementById("taskBlockerText");
 const taskSessionText = document.getElementById("taskSessionText");
+const taskReminderText = document.getElementById("taskReminderText");
 const taskStartNowButton = document.getElementById("taskStartNowButton");
 const taskFinishStepButton = document.getElementById("taskFinishStepButton");
 const taskPauseButton = document.getElementById("taskPauseButton");
 const taskUnblockButton = document.getElementById("taskUnblockButton");
 const taskPlanButton = document.getElementById("taskPlanButton");
+const taskRemindLaterButton = document.getElementById("taskRemindLaterButton");
+const taskTomorrowButton = document.getElementById("taskTomorrowButton");
+const taskDailyFollowupButton = document.getElementById("taskDailyFollowupButton");
+const taskClearFollowupButton = document.getElementById("taskClearFollowupButton");
 const taskDoneToggle = document.getElementById("taskDoneToggle");
 const taskNotesInput = document.getElementById("taskNotesInput");
 const taskTalkButton = document.getElementById("taskTalkButton");
@@ -1126,6 +1131,10 @@ function renameTaskEverywhere(fromTitle, toTitle, userId = getCurrentUserId()) {
     progress: normalizeTaskProgress(existing?.progress ?? current.progress),
     sessionStartedAt: Number(existing?.sessionStartedAt ?? current.sessionStartedAt ?? 0) || 0,
     sessionEndsAt: Number(existing?.sessionEndsAt ?? current.sessionEndsAt ?? 0) || 0,
+    reminderAt: Number(existing?.reminderAt ?? current.reminderAt ?? 0) || 0,
+    reminderLabel: normalizeTaskTextField(existing?.reminderLabel || current.reminderLabel || "", 120),
+    reminderCadence: normalizeTaskReminderCadence(existing?.reminderCadence || current.reminderCadence),
+    lastReminderAt: Number(existing?.lastReminderAt ?? current.lastReminderAt ?? 0) || 0,
     dueAt: Number(existing?.dueAt ?? current.dueAt ?? 0) || 0,
     dueLabel: String(existing?.dueLabel || current.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Date.now()
@@ -1459,6 +1468,13 @@ function maybeHandleLocalVoiceCommand(text) {
     }
     return `next move on ${taskTitle} is ${nextMove}.`;
   };
+  const getOverdueFollowupReply = () => {
+    const overdue = getTaskEntriesForUser()
+      .filter((entry) => isTaskReminderOverdue(entry))
+      .slice(0, 5)
+      .map((entry) => `${entry.title} (${formatTaskReminderSummary(entry)})`);
+    return overdue.length ? `overdue follow-ups: ${overdue.join("; ")}.` : "nothing is overdue right now.";
+  };
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1728,6 +1744,49 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: added ? `built a tighter attack plan for ${activeTaskTitle} and loaded the next move.` : `${activeTaskTitle} already has a working plan.`
+    };
+  }
+
+  const reminderMatch = normalized.match(/(?:remind me|follow up|check in)(?:\s+on)?\s+(.*?)(?:\s+(?:at|by|in|tonight|tomorrow|tomorrow morning|this afternoon|this evening).*)$/) || normalized.match(/(?:remind me|follow up|check in)\s+(?:about\s+)?(.+)/);
+  if (reminderMatch) {
+    const taskTitle = activeTaskTitle || getCurrentTaskTitle();
+    const parsed = parseTaskReminderPhrase(extractReminderTimingPhrase(normalized));
+    if (taskTitle && parsed) {
+      setTaskReminderState(taskTitle, parsed);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `locked. i'll follow up on ${taskTitle} ${formatTaskReminderSummary(readTaskEntry(taskTitle))}.`
+      };
+    }
+  }
+
+  const recurringMatch = normalized.match(/(?:check in|follow up|remind me)\s+(?:on\s+)?(?:this|it|this task)?\s*(?:every\s+day|everyday|every weekday|every week)/);
+  if (recurringMatch && activeTaskTitle) {
+    const parsed = parseTaskReminderPhrase(extractReminderTimingPhrase(normalized));
+    if (parsed) {
+      setTaskReminderState(activeTaskTitle, parsed);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${activeTaskTitle} now has a recurring follow-up: ${formatTaskReminderSummary(readTaskEntry(activeTaskTitle))}.`
+      };
+    }
+  }
+
+  if (/(?:clear|remove|delete)\s+(?:the\s+)?(?:reminder|follow up|check in)/.test(normalized) && activeTaskTitle) {
+    clearTaskReminderState(activeTaskTitle);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `cleared the follow-up for ${activeTaskTitle}.`
+    };
+  }
+
+  if (/(?:what(?:'s| is) overdue|what needs follow up|what needs a follow up|which tasks are overdue)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getOverdueFollowupReply()
     };
   }
 
@@ -2624,6 +2683,117 @@ function normalizeTaskProgress(value) {
   return Math.max(0, Math.min(100, Math.round(num)));
 }
 
+function normalizeTaskReminderCadence(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["daily", "every day", "everyday"].includes(normalized)) {
+    return "daily";
+  }
+  if (["weekday", "weekdays", "every weekday", "every workday"].includes(normalized)) {
+    return "weekday";
+  }
+  if (["weekly", "every week"].includes(normalized)) {
+    return "weekly";
+  }
+  return "";
+}
+
+function getNextReminderTimestampFromCadence(reminderAt, cadence) {
+  const base = Number(reminderAt || 0) || 0;
+  const normalizedCadence = normalizeTaskReminderCadence(cadence);
+  if (!base || !normalizedCadence) {
+    return 0;
+  }
+  const next = new Date(base);
+  if (normalizedCadence === "daily") {
+    next.setDate(next.getDate() + 1);
+    return next.getTime();
+  }
+  if (normalizedCadence === "weekly") {
+    next.setDate(next.getDate() + 7);
+    return next.getTime();
+  }
+  do {
+    next.setDate(next.getDate() + 1);
+  } while (next.getDay() === 0 || next.getDay() === 6);
+  return next.getTime();
+}
+
+function isTaskReminderOverdue(entry) {
+  const reminderAt = Number(entry?.reminderAt || 0) || 0;
+  return Boolean(reminderAt && !entry?.completed && reminderAt < Date.now());
+}
+
+function formatTaskReminderSummary(entry) {
+  const reminderAt = Number(entry?.reminderAt || 0) || 0;
+  const cadence = normalizeTaskReminderCadence(entry?.reminderCadence);
+  if (!reminderAt) {
+    return cadence ? `recurs ${cadence}` : "no follow-up set";
+  }
+
+  const label = formatTaskDueLabel(reminderAt, entry?.reminderLabel || "");
+  if (isTaskReminderOverdue(entry)) {
+    return cadence ? `overdue since ${label} · repeats ${cadence}` : `overdue since ${label}`;
+  }
+  return cadence ? `${label} · repeats ${cadence}` : label;
+}
+
+function parseTaskReminderPhrase(rawText) {
+  const cleaned = String(rawText || "").trim().toLowerCase();
+  if (!cleaned) {
+    return null;
+  }
+
+  const relativeMatch = cleaned.match(/\bin\s+(\d{1,3})\s+(minute|minutes|hour|hours|day|days)\b/);
+  if (relativeMatch) {
+    const amount = Number(relativeMatch[1]);
+    const unit = relativeMatch[2];
+    const next = new Date();
+    if (unit.startsWith("minute")) {
+      next.setMinutes(next.getMinutes() + amount);
+    } else if (unit.startsWith("hour")) {
+      next.setHours(next.getHours() + amount);
+    } else {
+      next.setDate(next.getDate() + amount);
+    }
+    return {
+      reminderAt: next.getTime(),
+      reminderLabel: cleaned,
+      reminderCadence: ""
+    };
+  }
+
+  const cadenceMatch = cleaned.match(/\bevery\s+(day|weekday|weekdays|week|morning)\b/);
+  const cadence = cadenceMatch
+    ? cadenceMatch[1] === "week" ? "weekly" : cadenceMatch[1] === "morning" ? "daily" : normalizeTaskReminderCadence(cadenceMatch[1])
+    : "";
+
+  const parsedDue = parseTaskDuePhrase(cleaned.replace(/\bevery\s+(day|weekday|weekdays|week|morning)\b/g, "").trim());
+  if (parsedDue) {
+    return {
+      reminderAt: Number(parsedDue.dueAt || 0) || 0,
+      reminderLabel: cleaned,
+      reminderCadence: cadence
+    };
+  }
+
+  return cadence
+    ? {
+        reminderAt: getNextReminderTimestampFromCadence(Date.now(), cadence),
+        reminderLabel: cleaned,
+        reminderCadence: cadence
+      }
+    : null;
+}
+
+function extractReminderTimingPhrase(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  const explicit = normalized.match(/\b(in\s+\d+\s+(?:minute|minutes|hour|hours|day|days)|tomorrow(?:\s+morning)?|today(?:\s+afternoon|\s+evening)?|tonight|this\s+afternoon|this\s+evening|every\s+day|everyday|every\s+weekday|every\s+week)\b/);
+  return explicit ? explicit[1] : normalized;
+}
+
 function formatTaskDueLabel(dueAt, dueLabel = "") {
   const timestamp = Number(dueAt || 0) || 0;
   if (!timestamp) {
@@ -2711,6 +2881,10 @@ function buildTaskExecutionParts(entry) {
   if (sprint !== "not running") {
     parts.push(sprint);
   }
+  const reminder = formatTaskReminderSummary(entry);
+  if (reminder && reminder !== "no follow-up set") {
+    parts.push(`follow up ${reminder}`);
+  }
   return parts;
 }
 
@@ -2733,6 +2907,10 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     progress: normalizeTaskProgress(entry.progress),
     sessionStartedAt: Number(entry.sessionStartedAt || 0) || 0,
     sessionEndsAt: Number(entry.sessionEndsAt || 0) || 0,
+    reminderAt: Number(entry.reminderAt || 0) || 0,
+    reminderLabel: normalizeTaskTextField(entry.reminderLabel || "", 120),
+    reminderCadence: normalizeTaskReminderCadence(entry.reminderCadence),
+    lastReminderAt: Number(entry.lastReminderAt || 0) || 0,
     dueAt: Number(entry.dueAt || 0) || 0,
     dueLabel: String(entry.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Number(entry.updatedAt || 0) || 0
@@ -2763,6 +2941,10 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     progress: normalizeTaskProgress(nextValue?.progress),
     sessionStartedAt: Number(nextValue?.sessionStartedAt || 0) || 0,
     sessionEndsAt: Number(nextValue?.sessionEndsAt || 0) || 0,
+    reminderAt: Number(nextValue?.reminderAt || 0) || 0,
+    reminderLabel: normalizeTaskTextField(nextValue?.reminderLabel || "", 120),
+    reminderCadence: normalizeTaskReminderCadence(nextValue?.reminderCadence),
+    lastReminderAt: Number(nextValue?.lastReminderAt || 0) || 0,
     dueAt: Number(nextValue?.dueAt || 0) || 0,
     dueLabel: String(nextValue?.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Date.now()
@@ -2829,10 +3011,32 @@ function setTaskExecutionState(title, fields, userId = getCurrentUserId()) {
       blocker: fields?.blocker ?? current.blocker,
       progress: fields?.progress ?? current.progress,
       sessionStartedAt: fields?.sessionStartedAt ?? current.sessionStartedAt,
-      sessionEndsAt: fields?.sessionEndsAt ?? current.sessionEndsAt
+      sessionEndsAt: fields?.sessionEndsAt ?? current.sessionEndsAt,
+      reminderAt: fields?.reminderAt ?? current.reminderAt,
+      reminderLabel: fields?.reminderLabel ?? current.reminderLabel,
+      reminderCadence: fields?.reminderCadence ?? current.reminderCadence,
+      lastReminderAt: fields?.lastReminderAt ?? current.lastReminderAt
     }),
     userId
   );
+}
+
+function setTaskReminderState(title, fields, userId = getCurrentUserId()) {
+  return setTaskExecutionState(title, {
+    reminderAt: fields?.reminderAt ?? 0,
+    reminderLabel: fields?.reminderLabel ?? "",
+    reminderCadence: fields?.reminderCadence ?? "",
+    lastReminderAt: fields?.lastReminderAt ?? 0
+  }, userId);
+}
+
+function clearTaskReminderState(title, userId = getCurrentUserId()) {
+  return setTaskReminderState(title, {
+    reminderAt: 0,
+    reminderLabel: "",
+    reminderCadence: "",
+    lastReminderAt: 0
+  }, userId);
 }
 
 function addTaskSubtask(title, subtaskTitle, userId = getCurrentUserId()) {
@@ -3508,6 +3712,7 @@ function buildMessagesForApi() {
         .map((item) => `${item.completed ? "[done]" : "[todo]"} ${item.title}`)
         .join("\n")
     : "";
+  const activeReminderSummary = activeTaskState ? formatTaskReminderSummary(activeTaskState) : "";
   const chatHistorySummary = buildChatHistorySummary(currentUserId);
 
   const now = Date.now();
@@ -3552,7 +3757,7 @@ function buildMessagesForApi() {
   if (getCurrentPageLabel() === "task") {
     sysParts.push("the user is currently inside the task workspace for the active task above. default to helping with that task and do not ask which task they mean unless they explicitly name a different one.");
     sysParts.push("for task help, keep replies short by default, usually 1 to 3 sentences or a tight bullet list. only go long when the user asks for detail or the problem genuinely needs it.");
-    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', or 'progress:' and the app will save them.");
+    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', 'progress:', or 'reminder:' and the app will save them.");
   }
   sysParts.push("for normal conversation, keep replies tight by default: usually 1 to 3 short sentences unless the user explicitly asks for depth.");
   sysParts.push("if the user greets you or checks in without giving direction, respond proactively using their current task board or to-do list. suggest 1 to 3 concrete next moves or ask them to pick one. do not give a generic greeting with no direction.");
@@ -3567,6 +3772,9 @@ function buildMessagesForApi() {
   }
   if (activeSubtasks) {
     sysParts.push("active task subtasks:\n" + activeSubtasks);
+  }
+  if (activeReminderSummary && activeReminderSummary !== "no follow-up set") {
+    sysParts.push(`active task follow-up state: ${activeReminderSummary}`);
   }
   if (memoryLines) {
     sysParts.push("memory (older context):\n" + memoryLines);
@@ -3858,6 +4066,15 @@ function maybeApplyTaskWorkspaceSuggestionsFromAnna(text) {
     changed = true;
   }
 
+  const reminderMatch = String(text || "").match(/(?:^|\n)reminder:\s*(.{1,120})/i);
+  if (reminderMatch) {
+    const parsedReminder = parseTaskReminderPhrase(reminderMatch[1]);
+    if (parsedReminder) {
+      setTaskReminderState(activeTitle, parsedReminder);
+      changed = true;
+    }
+  }
+
   if (changed) {
     renderTaskWorkspace();
     renderStartupDashboard();
@@ -3972,7 +4189,8 @@ function renderStartupDashboard() {
 
     const ownership = buildTaskOwnershipParts(state);
     const execution = buildTaskExecutionParts(state).filter((item) => !item.startsWith("next "));
-    const metaParts = [...ownership, ...execution].slice(0, 3);
+    const reminder = formatTaskReminderSummary(state);
+    const metaParts = [...ownership, ...execution, ...(reminder !== "no follow-up set" ? [`follow up ${reminder}`] : [])].slice(0, 3);
     if (metaParts.length) {
       const meta = document.createElement("div");
       meta.className = "startup-task-meta";
@@ -4103,7 +4321,11 @@ function renderTaskWorkspace() {
     if (taskSessionText) {
       taskSessionText.textContent = "not running";
     }
-    [taskStartNowButton, taskFinishStepButton, taskPauseButton, taskUnblockButton, taskPlanButton].forEach((button) => {
+    if (taskReminderText) {
+      taskReminderText.textContent = "no follow-up set";
+      taskReminderText.classList.remove("is-overdue");
+    }
+    [taskStartNowButton, taskFinishStepButton, taskPauseButton, taskUnblockButton, taskPlanButton, taskRemindLaterButton, taskTomorrowButton, taskDailyFollowupButton, taskClearFollowupButton].forEach((button) => {
       if (button) button.disabled = true;
     });
     if (taskNotesInput) {
@@ -4177,6 +4399,10 @@ function renderTaskWorkspace() {
   if (taskSessionText) {
     taskSessionText.textContent = formatTaskSessionText(state);
   }
+  if (taskReminderText) {
+    taskReminderText.textContent = formatTaskReminderSummary(state);
+    taskReminderText.classList.toggle("is-overdue", isTaskReminderOverdue(state));
+  }
   if (taskStartNowButton) {
     taskStartNowButton.disabled = state.completed;
   }
@@ -4191,6 +4417,18 @@ function renderTaskWorkspace() {
   }
   if (taskPlanButton) {
     taskPlanButton.disabled = state.completed;
+  }
+  if (taskRemindLaterButton) {
+    taskRemindLaterButton.disabled = state.completed;
+  }
+  if (taskTomorrowButton) {
+    taskTomorrowButton.disabled = state.completed;
+  }
+  if (taskDailyFollowupButton) {
+    taskDailyFollowupButton.disabled = state.completed;
+  }
+  if (taskClearFollowupButton) {
+    taskClearFollowupButton.disabled = !state.reminderAt && !state.reminderCadence;
   }
   if (taskDoneToggle) {
     taskDoneToggle.disabled = false;
@@ -6103,6 +6341,58 @@ taskPlanButton?.addEventListener("click", () => {
     return;
   }
   buildLocalTaskExecutionPlan(title);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskRemindLaterButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  const parsed = parseTaskReminderPhrase("in 2 hours");
+  if (!parsed) {
+    return;
+  }
+  setTaskReminderState(title, parsed);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskTomorrowButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  const parsed = parseTaskReminderPhrase("tomorrow morning");
+  if (!parsed) {
+    return;
+  }
+  setTaskReminderState(title, parsed);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskDailyFollowupButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  const parsed = parseTaskReminderPhrase("every day");
+  if (!parsed) {
+    return;
+  }
+  setTaskReminderState(title, parsed);
+  renderStartupDashboard();
+  renderTaskWorkspace();
+});
+
+taskClearFollowupButton?.addEventListener("click", () => {
+  const title = getCurrentTaskTitle();
+  if (!title) {
+    return;
+  }
+  clearTaskReminderState(title);
   renderStartupDashboard();
   renderTaskWorkspace();
 });

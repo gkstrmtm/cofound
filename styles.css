@@ -730,6 +730,10 @@ button {
   font-weight: 700;
 }
 
+.task-operator-value.is-overdue {
+  color: #b85a17;
+}
+
 .task-operator-actions {
   display: flex;
   flex-wrap: wrap;
