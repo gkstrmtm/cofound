@@ -509,6 +509,17 @@ function findTaskDoneIntent(text) {
   return taskTitles.find((title) => normalized.includes(title)) || "";
 }
 
+function isBulkTaskDoneIntent(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized) {
+    return false;
+  }
+
+  const wantsCompletion = /(?:done|finished|complete|completed)/.test(normalized);
+  const targetsAll = /\b(all|every|everything)\b/.test(normalized) && /\b(task|tasks|todo|to do|board|list)\b/.test(normalized);
+  return wantsCompletion && targetsAll;
+}
+
 function maybeHandleLocalVoiceCommand(text) {
   const normalized = normalizeBufferedSpeechParts([text]);
   if (!normalized) {
@@ -520,6 +531,35 @@ function maybeHandleLocalVoiceCommand(text) {
       handled: true,
       stopSession: true,
       reply: "okay. say hi anna when you want me again."
+    };
+  }
+
+  if (isBulkTaskDoneIntent(normalized)) {
+    const taskEntries = getTaskEntriesForUser();
+    const incompleteEntries = taskEntries.filter((entry) => entry && entry.title && !entry.completed);
+    incompleteEntries.forEach((entry) => {
+      updateTaskEntry(entry.title, (current) => ({ ...current, completed: true }));
+    });
+    renderTaskWorkspace();
+    renderStartupDashboard();
+
+    if (!taskEntries.length) {
+      return {
+        handled: true,
+        reply: "you don't have any tasks to mark done."
+      };
+    }
+
+    if (!incompleteEntries.length) {
+      return {
+        handled: true,
+        reply: "all your tasks were already marked done."
+      };
+    }
+
+    return {
+      handled: true,
+      reply: `marked ${incompleteEntries.length} task${incompleteEntries.length === 1 ? "" : "s"} done.`
     };
   }
 
