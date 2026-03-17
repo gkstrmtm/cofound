@@ -2797,6 +2797,63 @@ function setVoiceRepliesEnabled(_enabled) {
   }
 }
 
+async function requestMicrophoneAccessFromGesture() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    showSpeechStatus("this browser can't request microphone access here.", 4200);
+    return false;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+    stream.getTracks().forEach((track) => {
+      try {
+        track.stop();
+      } catch {
+        // ignore
+      }
+    });
+    clearAudioNotice();
+    return true;
+  } catch (err) {
+    const name = String(err?.name || err?.message || "").trim().toLowerCase();
+    if (name.includes("notallowed") || name.includes("permission") || name.includes("denied")) {
+      showSpeechStatus("microphone access is still blocked. allow it in the browser and try again.", 4200);
+      return false;
+    }
+    if (name.includes("notfound") || name.includes("devicesnotfound")) {
+      showSpeechStatus("no microphone was found for this browser.", 4200);
+      return false;
+    }
+    showSpeechStatus("i couldn't get microphone access yet. try again.", 3200);
+    return false;
+  }
+}
+
+async function retryVoiceCaptureFromGesture() {
+  unlockAudioFromGesture();
+  const micReady = await requestMicrophoneAccessFromGesture();
+  if (!micReady) {
+    return;
+  }
+
+  if (shouldUseWakeWordMode()) {
+    startInlineVoiceCapture("tap");
+    return;
+  }
+
+  persistentListeningEnabled = true;
+  pendingResumeListening = false;
+  singleTurnVoiceMode = false;
+  playRecordBeep(true);
+  setListening(true);
+}
+
 function getSelectedVoiceId() {
   return (localStorage.getItem(STORAGE_KEYS.elevenVoiceId) || "").trim();
 }
@@ -4021,7 +4078,6 @@ function toggleListeningFromTap(event) {
   if (event?.type === "pointerup") {
     event.preventDefault?.();
   }
-  unlockAudioFromGesture();
   const now = Date.now();
   if (now - lastToggleAt < 260) {
     return;
@@ -4029,6 +4085,12 @@ function toggleListeningFromTap(event) {
   lastToggleAt = now;
 
   const nextActive = !persistentListeningEnabled;
+  if (nextActive) {
+    void retryVoiceCaptureFromGesture();
+    return;
+  }
+
+  unlockAudioFromGesture();
   singleTurnVoiceMode = false;
   persistentListeningEnabled = nextActive;
   pendingResumeListening = false;
@@ -4617,7 +4679,7 @@ historyButton?.addEventListener("click", () => {
 });
 
 audioNoticeAction?.addEventListener("click", () => {
-  unlockAudioFromGesture();
+  void retryVoiceCaptureFromGesture();
 });
 
 accountSave?.addEventListener("click", () => {
