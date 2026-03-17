@@ -1994,8 +1994,23 @@ function escapeText(text) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function normalizeChecklistMarkup(text) {
+  return String(text || "")
+    .replace(/\r/g, "")
+    .replace(/(?:^|\s)(?:[-*•]\s*)?\[(?: |x|X)\]\s*/g, "\n- ");
+}
+
+function cleanExtractedListItem(text) {
+  return String(text || "")
+    .replace(/^(?:[-*•]|\d+[.)])\s*/, "")
+    .replace(/^\[(?: |x|X)\]\s*/, "")
+    .replace(/[\[\]]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function extractListFromText(text) {
-  const raw = String(text || "").trim();
+  const raw = normalizeChecklistMarkup(text).trim();
   if (!raw) {
     return null;
   }
@@ -2006,7 +2021,7 @@ function extractListFromText(text) {
     if (!line) continue;
     const bullet = line.match(/^[-*•]\s+(.*)$/);
     const numbered = line.match(/^\d+[.)]\s+(.*)$/);
-    const content = (bullet && bullet[1]) || (numbered && numbered[1]);
+    const content = cleanExtractedListItem((bullet && bullet[1]) || (numbered && numbered[1]));
     if (content && content.trim()) {
       items.push(content.trim());
     }
@@ -2033,7 +2048,7 @@ function extractTodoListFromAnnaText(text) {
     return null;
   }
 
-  const raw = String(text || "").trim();
+  const raw = normalizeChecklistMarkup(text).trim();
   if (!raw) {
     return null;
   }
@@ -2045,10 +2060,7 @@ function extractTodoListFromAnnaText(text) {
 
   const items = compact
     .split(/\r?\n|\s*[;•]\s*|,\s+|\s+and\s+/i)
-    .map((item) => String(item || "")
-      .replace(/^[-*•\d.)\s]+/, "")
-      .trim()
-    )
+    .map((item) => cleanExtractedListItem(item))
     .filter((item) => item && item.length <= 120 && !/^here(?:'s| is)\b/i.test(item));
 
   const uniqueItems = Array.from(new Set(items.map((item) => normalizeTaskTitle(item)).filter(Boolean))).slice(0, 12);
@@ -3196,12 +3208,17 @@ function sanitizeAnnaReplyText(text) {
   return String(text || "")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, ", ")
+    .replace(/(?:^|\n)\s*(?:[-*•]\s*)?\[(?: |x|X)\]\s*/g, "\n")
+    .replace(/\[(?: |x|X)\]\s*/g, "")
+    .replace(/[\[\]]/g, "")
     .replace(
       /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just |all )?text(?:[- ]based|[- ]only)?(?: here)?|i (?:can't|cannot) speak(?: out loud)?|i do not have a voice here|i don't have a voice here|no voice here|you(?:'ll| will) need (?:a )?different setup for voice|voice (?:isn't|is not|isn’t) available here|i can only respond in text(?: here)?|unable to use voice here|can't do voice here)(?:[^.!?]*[.!?])?/gi,
       " "
     )
+    .replace(/(?:^|\n)\s*[-*•]\s+/g, "\n")
     .replace(/\s+,/g, ",")
-    .replace(/\s{2,}/g, " ")
+    .replace(/[^\S\r\n]{2,}/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -3359,7 +3376,7 @@ async function startStreamingAnnaReply(pendingId) {
 
     const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
     resolvePendingAnna(pendingId, cleanedFinal);
-    const createdList = maybeShowListSheetFromAnna(cleanedFinal);
+    const createdList = maybeShowListSheetFromAnna(final);
     maybeApplyTaskWorkspaceSuggestionsFromAnna(cleanedFinal);
     if (pendingTodoListGenerationRequest) {
       const shouldRedirect = pendingTodoListRedirectToStartup && createdList && getCurrentPageLabel() === "task";
