@@ -2797,43 +2797,6 @@ function setVoiceRepliesEnabled(_enabled) {
   }
 }
 
-async function requestMicrophoneAccessFromGesture() {
-  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-    return { ok: false, hardBlocked: false, reason: "unsupported" };
-  }
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    });
-    stream.getTracks().forEach((track) => {
-      try {
-        track.stop();
-      } catch {
-        // ignore
-      }
-    });
-    clearAudioNotice();
-    return { ok: true, hardBlocked: false, reason: "granted" };
-  } catch (err) {
-    const name = String(err?.name || err?.message || "").trim().toLowerCase();
-    if (name.includes("notallowed") || name.includes("permission") || name.includes("denied")) {
-      showSpeechStatus("microphone access is still blocked. allow it in the browser and try again.", 4200);
-      return { ok: false, hardBlocked: true, reason: "blocked" };
-    }
-    if (name.includes("notfound") || name.includes("devicesnotfound")) {
-      showSpeechStatus("i couldn't confirm the mic from the browser prompt, but i'm trying voice anyway.", 2800);
-      return { ok: false, hardBlocked: false, reason: "notfound" };
-    }
-    showSpeechStatus("i couldn't confirm microphone access yet, but i'm trying voice anyway.", 2800);
-    return { ok: false, hardBlocked: false, reason: "unknown" };
-  }
-}
-
 async function getMicrophonePermissionState() {
   if (!navigator.permissions || typeof navigator.permissions.query !== "function") {
     return "";
@@ -2846,10 +2809,9 @@ async function getMicrophonePermissionState() {
   }
 }
 
-async function retryVoiceCaptureFromGesture() {
+function retryVoiceCaptureFromGesture() {
   unlockAudioFromGesture();
-
-  const micAttemptPromise = requestMicrophoneAccessFromGesture();
+  clearAudioNotice();
 
   if (shouldUseWakeWordMode()) {
     startInlineVoiceCapture("tap");
@@ -2860,16 +2822,30 @@ async function retryVoiceCaptureFromGesture() {
     playRecordBeep(true);
     setListening(true);
   }
+}
 
-  const micAttempt = await micAttemptPromise;
-  if (micAttempt?.hardBlocked) {
-    if (isListeningNow || persistentListeningEnabled) {
-      pendingResumeListening = false;
-      persistentListeningEnabled = false;
-      singleTurnVoiceMode = false;
-      setListening(false);
+function resetSpeechRecognizer() {
+  if (!speechRecognizer) {
+    return;
+  }
+  try {
+    speechRecognizer.onresult = null;
+    speechRecognizer.onerror = null;
+    speechRecognizer.onend = null;
+    speechRecognizer.onstart = null;
+  } catch {
+    // ignore
+  }
+  try {
+    speechRecognizer.abort();
+  } catch {
+    try {
+      speechRecognizer.stop();
+    } catch {
+      // ignore
     }
   }
+  speechRecognizer = null;
 }
 
 function getSelectedVoiceId() {
@@ -3819,12 +3795,32 @@ function setListening(isListening) {
       try {
         speechRecognizer.start();
       } catch {
+        resetSpeechRecognizer();
+        speechRecognizer = ensureSpeechRecognizer();
+        if (speechRecognizer) {
+          try {
+            speechRecognizer.start();
+            return;
+          } catch {
+            // fall through to user-facing failure state
+          }
+        }
         isListeningNow = false;
         persistentListeningEnabled = false;
         pendingResumeListening = false;
         singleTurnVoiceMode = false;
         updateListeningUi();
-        showSpeechStatus("voice input couldn't start. tap again.", 3200);
+        Promise.resolve(getMicrophonePermissionState())
+          .then((state) => {
+            if (state === "denied") {
+              showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
+            } else {
+              showSpeechStatus("voice input couldn't start. tap enable voice again.", 3200);
+            }
+          })
+          .catch(() => {
+            showSpeechStatus("voice input couldn't start. tap enable voice again.", 3200);
+          });
         startWakeWordMonitoring();
       }
       return;
