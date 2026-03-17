@@ -2065,18 +2065,41 @@ function writeStartupLists(lists) {
   writeJson(STORAGE_KEYS.startupLists, Array.isArray(lists) ? lists : []);
 }
 
+function syncExtractedListToTaskBoard(extracted, userId = getCurrentUserId()) {
+  const title = String(extracted?.title || "").trim().toLowerCase();
+  if (title === "resources") {
+    return [];
+  }
+
+  const items = Array.isArray(extracted?.items)
+    ? Array.from(
+        new Set(
+          extracted.items
+            .map((item) => normalizeTaskTitle(item))
+            .filter(Boolean)
+            .slice(0, 24)
+        )
+      )
+    : [];
+
+  items.forEach((taskTitle) => {
+    updateTaskEntry(
+      taskTitle,
+      (current) => ({
+        ...current,
+        title: taskTitle
+      }),
+      userId
+    );
+  });
+
+  return items;
+}
+
 function persistStartupList(extracted) {
   const userId = getCurrentUserId();
-  if (userId === "anonymous") {
-    return;
-  }
   const title = String(extracted?.title || "").trim().toLowerCase();
-  const items = Array.isArray(extracted?.items)
-    ? extracted.items
-        .map((x) => String(x || "").trim().toLowerCase())
-        .filter(Boolean)
-        .slice(0, 24)
-    : [];
+  const items = syncExtractedListToTaskBoard(extracted, userId);
 
   if (!items.length) {
     return;
@@ -2086,6 +2109,8 @@ function persistStartupList(extracted) {
   const entry = { title, items, ts: Date.now(), userId };
   const next = [...log, entry].slice(-80);
   writeStartupLists(next);
+  renderStartupDashboard();
+  renderTaskWorkspace();
 }
 
 function renderStartupDashboard() {
