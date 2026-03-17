@@ -165,6 +165,8 @@ let passiveWakeWordEnabled = false;
 let wakeWordRestartTimer = null;
 let wakeWordDetectedAt = 0;
 let inlineVoiceHideTimer = null;
+let pendingTodoListGenerationRequest = false;
+let pendingTodoListRedirectToStartup = false;
 let supabaseClient = null;
 let supabaseConfigured = false;
 let supabaseInitPromise = null;
@@ -327,6 +329,9 @@ function submitRecognizedUserText(text) {
     maybeResumeListeningAfterReply();
     return;
   }
+  setPendingTodoListGeneration(Boolean(preparedRequest?.todoListRequest), {
+    redirectToStartup: Boolean(preparedRequest?.redirectToStartup)
+  });
 
   const localCommand = maybeHandleLocalVoiceCommand(normalized);
   if (localCommand?.handled) {
@@ -589,6 +594,11 @@ function clearCurrentStartupList(options = {}) {
   return currentItems.length;
 }
 
+function setPendingTodoListGeneration(enabled, options = {}) {
+  pendingTodoListGenerationRequest = Boolean(enabled);
+  pendingTodoListRedirectToStartup = Boolean(enabled && options.redirectToStartup);
+}
+
 function maybePrepareTaskBoardForUserRequest(text) {
   const normalized = normalizeBufferedSpeechParts([text]);
   if (!normalized || !wantsClearTodoList(normalized)) {
@@ -602,7 +612,9 @@ function maybePrepareTaskBoardForUserRequest(text) {
   if (wantsNewTodoList(normalized)) {
     return {
       continueToModel: true,
-      clearedCount
+      clearedCount,
+      todoListRequest: true,
+      redirectToStartup: getCurrentPageLabel() === "task" && clearedCount > 0
     };
   }
 
@@ -1939,6 +1951,9 @@ function buildMessagesForApi() {
   sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
   sysParts.push("if the user asks what is on the to-do list, what they were working on, or what happened earlier, answer directly from the saved task board, notes, and chat history above. do not ask them to repeat information that is already present.");
   sysParts.push("if the user asks you to make, replace, refresh, or create a to-do list or checklist, answer with a real bullet or numbered list of tasks so the app can save it as the active checklist. do not just describe a list in prose.");
+  if (pendingTodoListGenerationRequest) {
+    sysParts.push("the user is actively asking for a fresh startup to-do list right now. your reply must be only a concise bullet or numbered list with 4 to 8 actionable tasks. no intro sentence, no outro, no explanation.");
+  }
   sysParts.push("match the depth to the ask: casual when the user wants quick help, but go deep when they want to build, diagnose, or decide something important.");
   sysParts.push("when going deep, think like a real cofounder: define the problem, state a point of view, show tradeoffs, and turn the answer into concrete priorities, experiments, or next moves.");
   sysParts.push("for deeper business answers, naturally cover what is happening, what you recommend, and what the user should do next, but do not force obvious section labels unless they improve readability.");
@@ -2007,6 +2022,37 @@ function extractListFromText(text) {
   }
 
   return null;
+}
+
+function extractTodoListFromAnnaText(text) {
+  const direct = extractListFromText(text);
+  if (direct) {
+    return direct;
+  }
+  if (!pendingTodoListGenerationRequest) {
+    return null;
+  }
+
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const compact = raw
+    .replace(/^here(?:'s| is)\s+(?:a|your)\s+(?:new\s+)?(?:to do|todo|checklist|list)\s*:?[\s\n]*/i, "")
+    .replace(/^to do\s*:?[\s\n]*/i, "")
+    .trim();
+
+  const items = compact
+    .split(/\r?\n|\s*[;•]\s*|,\s+|\s+and\s+/i)
+    .map((item) => String(item || "")
+      .replace(/^[-*•\d.)\s]+/, "")
+      .trim()
+    )
+    .filter((item) => item && item.length <= 120 && !/^here(?:'s| is)\b/i.test(item));
+
+  const uniqueItems = Array.from(new Set(items.map((item) => normalizeTaskTitle(item)).filter(Boolean))).slice(0, 12);
+  return uniqueItems.length >= 3 ? { title: "to do", items: uniqueItems } : null;
 }
 
 function isProbablyUrl(text) {
@@ -2091,11 +2137,11 @@ function renderSheetList(extracted) {
 
 function maybeShowListSheetFromAnna(text) {
   if (!listSheetBody || !listSheetTitle) {
-    return;
+    return false;
   }
-  const extracted = extractListFromText(text);
+  const extracted = extractTodoListFromAnnaText(text);
   if (!extracted) {
-    return;
+    return false;
   }
 
   listSheetTitle.textContent = extracted.title;
@@ -2103,6 +2149,7 @@ function maybeShowListSheetFromAnna(text) {
   setListSheetOpen(true);
 
   persistStartupList(extracted);
+  return true;
 }
 
 function maybeApplyTaskWorkspaceSuggestionsFromAnna(text) {
@@ -3312,8 +3359,19 @@ async function startStreamingAnnaReply(pendingId) {
 
     const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
     resolvePendingAnna(pendingId, cleanedFinal);
-    maybeShowListSheetFromAnna(cleanedFinal);
+    const createdList = maybeShowListSheetFromAnna(cleanedFinal);
     maybeApplyTaskWorkspaceSuggestionsFromAnna(cleanedFinal);
+    if (pendingTodoListGenerationRequest) {
+      const shouldRedirect = pendingTodoListRedirectToStartup && createdList && getCurrentPageLabel() === "task";
+      setPendingTodoListGeneration(false);
+      if (shouldRedirect) {
+        try {
+          window.location.href = "startup.html";
+        } catch {
+          // ignore navigation failures
+        }
+      }
+    }
 
     if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
       const leftover = sanitizeAnnaReplyText(String(speakBuffer || "").trim());
@@ -4376,6 +4434,9 @@ function sendTypedToAnna(rawText) {
     }
     return;
   }
+  setPendingTodoListGeneration(Boolean(preparedRequest?.todoListRequest), {
+    redirectToStartup: Boolean(preparedRequest?.redirectToStartup)
+  });
 
   pushEntry("user", lower);
   appendToMemory("user", lower);
