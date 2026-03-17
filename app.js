@@ -22,6 +22,8 @@ const projectsLeftEl = document.getElementById("projectsLeft");
 const startupBriefingSummary = document.getElementById("startupBriefingSummary");
 const startupBoardAlerts = document.getElementById("startupBoardAlerts");
 const startupFocusList = document.getElementById("startupFocusList");
+const startupStandupSummary = document.getElementById("startupStandupSummary");
+const startupTimelineList = document.getElementById("startupTimelineList");
 const startupTasksEl = document.getElementById("startupTasks");
 
 const taskStage = document.getElementById("taskStage");
@@ -1834,6 +1836,21 @@ function maybeHandleLocalVoiceCommand(text) {
     };
   }
 
+  if (/(?:standup|daily standup|give me a standup|what moved today|what changed today)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: buildBoardStandupReply()
+    };
+  }
+
+  if (/(?:timeline|recent activity|what happened recently|what's been moving)/.test(normalized)) {
+    const items = getBoardTimelineData().slice(0, 4).map((item) => `${item.title} ${item.kind} ${formatRelativeTime(Date.now() - item.ts)}`);
+    return {
+      handled: true,
+      reply: items.length ? `recent board activity: ${items.join("; ")}.` : "no recent board activity yet."
+    };
+  }
+
   const progressMatch = normalized.match(/(?:set|make|move|update)\s+(?:the\s+)?progress(?:\s+for\s+(.+?))?\s+(?:to|at)\s+(\d{1,3})\s*(?:percent|%)/) || normalized.match(/(.+?)\s+is\s+(\d{1,3})\s*(?:percent|%)\s+done/);
   if (progressMatch) {
     const taskTitle = resolveTaskReference(progressMatch[1] || activeTaskTitle || "", activeTaskTitle);
@@ -2889,6 +2906,94 @@ function buildDailyBriefingReply(userId = getCurrentUserId()) {
   return `${briefing.summary} ${focusLines}.${alertText}`.trim();
 }
 
+function getTodayStartTimestamp() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function getBoardStandupData(userId = getCurrentUserId()) {
+  const entries = getTaskEntriesForUser(userId);
+  const todayStart = getTodayStartTimestamp();
+  const active = entries.filter((entry) => normalizeTaskWorkflowStatus(entry.workflowStatus) === "active" && !entry.completed);
+  const blocked = entries.filter((entry) => !entry.completed && (normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked" || getTaskDependencyState(entry, userId).blocking.length));
+  const shipped = entries.filter((entry) => entry.completed && Number(entry.updatedAt || 0) >= todayStart);
+  const touched = entries.filter((entry) => Number(entry.updatedAt || 0) >= todayStart && !entry.completed);
+  const overdue = entries.filter((entry) => isTaskReminderOverdue(entry));
+
+  const summaryParts = [];
+  if (active.length) summaryParts.push(`${active.length} active`);
+  if (blocked.length) summaryParts.push(`${blocked.length} blocked`);
+  if (shipped.length) summaryParts.push(`${shipped.length} shipped today`);
+  if (touched.length && !active.length) summaryParts.push(`${touched.length} moved today`);
+  if (overdue.length) summaryParts.push(`${overdue.length} overdue follow-up${overdue.length === 1 ? "" : "s"}`);
+
+  return {
+    summary: summaryParts.length ? `standup: ${summaryParts.join(" · ")}.` : "standup: no movement yet today.",
+    active,
+    blocked,
+    shipped,
+    touched,
+    overdue
+  };
+}
+
+function getBoardTimelineData(userId = getCurrentUserId(), limit = 6) {
+  const entries = getTaskEntriesForUser(userId);
+  const points = [];
+
+  entries.forEach((entry) => {
+    const updatedAt = Number(entry.updatedAt || 0) || 0;
+    if (updatedAt) {
+      points.push({
+        ts: updatedAt,
+        title: entry.title,
+        kind: entry.completed ? "shipped" : normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked" ? "blocked" : "updated",
+        detail: entry.completed
+          ? "marked done"
+          : normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked"
+            ? entry.blocker || buildTaskDependencySummary(entry, userId) || "needs attention"
+            : getTaskNextActionText(entry)
+      });
+    }
+
+    const reminderAt = Number(entry.lastReminderAt || 0) || 0;
+    if (reminderAt) {
+      points.push({
+        ts: reminderAt,
+        title: entry.title,
+        kind: "follow-up",
+        detail: formatTaskReminderSummary(entry)
+      });
+    }
+
+    const sessionStart = Number(entry.sessionStartedAt || 0) || 0;
+    if (sessionStart) {
+      points.push({
+        ts: sessionStart,
+        title: entry.title,
+        kind: "sprint",
+        detail: formatTaskSessionText(entry)
+      });
+    }
+  });
+
+  return points
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, limit);
+}
+
+function buildBoardStandupReply(userId = getCurrentUserId()) {
+  const standup = getBoardStandupData(userId);
+  const activeLine = standup.active.slice(0, 3).map((entry) => `${entry.title} → ${getTaskNextActionText(entry)}`).join("; ");
+  const blockedLine = standup.blocked.slice(0, 2).map((entry) => `${entry.title} (${buildTaskDependencySummary(entry, userId) || entry.blocker || "blocked"})`).join("; ");
+  const shippedLine = standup.shipped.slice(0, 2).map((entry) => entry.title).join(", ");
+  const parts = [standup.summary];
+  if (activeLine) parts.push(`moving: ${activeLine}.`);
+  if (blockedLine) parts.push(`blocked: ${blockedLine}.`);
+  if (shippedLine) parts.push(`shipped: ${shippedLine}.`);
+  return parts.join(" ").trim();
+}
+
 function parseTaskReminderPhrase(rawText) {
   const cleaned = String(rawText || "").trim().toLowerCase();
   if (!cleaned) {
@@ -3863,6 +3968,8 @@ function buildMessagesForApi() {
     .join("\n");
   const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
   const dailyBriefingSummary = buildDailyBriefingReply(currentUserId);
+  const standupSummary = buildBoardStandupReply(currentUserId);
+  const timelineSummary = getBoardTimelineData(currentUserId, 4).map((item) => `- ${item.title} · ${item.kind} · ${formatRelativeTime(Date.now() - item.ts)} · ${item.detail}`).join("\n");
   const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
   const activeTaskNotes = String(activeTaskState?.notes || "").trim();
   const activeSubtasks = Array.isArray(activeTaskState?.subtasks)
@@ -3928,6 +4035,12 @@ function buildMessagesForApi() {
   }
   if (dailyBriefingSummary) {
     sysParts.push(`daily board briefing: ${dailyBriefingSummary}`);
+  }
+  if (standupSummary) {
+    sysParts.push(`daily standup: ${standupSummary}`);
+  }
+  if (timelineSummary) {
+    sysParts.push("recent board timeline:\n" + timelineSummary);
   }
   if (activeTaskNotes) {
     sysParts.push(`active task notes:\n${activeTaskNotes.slice(0, 900)}`);
@@ -4301,7 +4414,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupStandupSummary) {
     return;
   }
 
@@ -4310,6 +4423,8 @@ function renderStartupDashboard() {
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
   const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
   const briefing = getDailyBriefingData(userId);
+  const standup = getBoardStandupData(userId);
+  const timeline = getBoardTimelineData(userId, 6);
 
   if (projectsLeftEl) {
     projectsLeftEl.textContent = String(remainingCount);
@@ -4359,6 +4474,33 @@ function renderStartupDashboard() {
       }
 
       startupFocusList.appendChild(card);
+    });
+  }
+  if (startupStandupSummary) {
+    startupStandupSummary.textContent = buildBoardStandupReply(userId);
+  }
+  if (startupTimelineList) {
+    startupTimelineList.innerHTML = "";
+    timeline.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "startup-timeline-item";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "startup-timeline-title";
+      titleEl.textContent = item.title;
+
+      const metaEl = document.createElement("div");
+      metaEl.className = "startup-timeline-meta";
+      metaEl.textContent = `${item.kind} · ${formatRelativeTime(Date.now() - item.ts)}`;
+
+      const detailEl = document.createElement("div");
+      detailEl.className = "startup-timeline-detail";
+      detailEl.textContent = item.detail;
+
+      row.appendChild(titleEl);
+      row.appendChild(metaEl);
+      row.appendChild(detailEl);
+      startupTimelineList.appendChild(row);
     });
   }
 

@@ -368,12 +368,38 @@ button {
   margin-top: 0.85rem;
 }
 
+.startup-timeline-list {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
 .startup-briefing-alert,
 .startup-briefing-focus-item {
   padding: 0.8rem 0.85rem;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-timeline-item {
+  padding: 0.8rem 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-timeline-title {
+  color: var(--olive);
+  font-weight: 800;
+}
+
+.startup-timeline-meta,
+.startup-timeline-detail {
+  margin-top: 0.22rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .startup-briefing-alert {
