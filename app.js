@@ -22,6 +22,8 @@ const projectsLeftEl = document.getElementById("projectsLeft");
 const startupBriefingSummary = document.getElementById("startupBriefingSummary");
 const startupBoardAlerts = document.getElementById("startupBoardAlerts");
 const startupFocusList = document.getElementById("startupFocusList");
+const startupTodayPlanSummary = document.getElementById("startupTodayPlanSummary");
+const startupTodayPlanList = document.getElementById("startupTodayPlanList");
 const startupStandupSummary = document.getElementById("startupStandupSummary");
 const startupTimelineList = document.getElementById("startupTimelineList");
 const startupTasksEl = document.getElementById("startupTasks");
@@ -1481,6 +1483,7 @@ function maybeHandleLocalVoiceCommand(text) {
       .map((entry) => `${entry.title} (${formatTaskReminderSummary(entry)})`);
     return overdue.length ? `overdue follow-ups: ${overdue.join("; ")}.` : "nothing is overdue right now.";
   };
+  const getTodayPlanCommandReply = () => buildTodayPlanReply();
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1672,6 +1675,81 @@ function maybeHandleLocalVoiceCommand(text) {
     }
   }
 
+  const currentMilestoneMatch = normalized.match(/(?:this|it|this task|current task)\s+(?:belongs to|is in|is part of|goes in)\s+(?:the\s+)?(.+?)\s+milestone\b/);
+  if (currentMilestoneMatch && activeTaskTitle) {
+    const milestone = normalizeTaskMilestone(currentMilestoneMatch[1]);
+    if (milestone) {
+      setTaskPlanningState(activeTaskTitle, { milestone });
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${activeTaskTitle} is now in the ${milestone} milestone.`
+      };
+    }
+  }
+
+  const milestoneMatch = normalized.match(/(?:put|move|assign|set)\s+(.+?)\s+(?:to|into|in)\s+(?:the\s+)?(.+?)\s+milestone\b/);
+  if (milestoneMatch) {
+    const taskTitle = resolveTaskReference(milestoneMatch[1], activeTaskTitle);
+    const milestone = normalizeTaskMilestone(milestoneMatch[2]);
+    if (taskTitle && milestone) {
+      setTaskPlanningState(taskTitle, { milestone });
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${taskTitle} is now in the ${milestone} milestone.`
+      };
+    }
+  }
+
+  const scheduleCurrentMatch = normalized.match(/(?:put|move|schedule)\s+(?:this|it|this task|current task)\s+(?:on|onto|for|at|to)\s+(.+)/);
+  if (scheduleCurrentMatch && activeTaskTitle) {
+    const schedule = parseTaskSchedulePhrase(scheduleCurrentMatch[1]);
+    if (schedule) {
+      setTaskPlanningState(activeTaskTitle, schedule);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `locked. ${activeTaskTitle} is on the plan for ${formatTaskScheduleLabel(schedule.scheduledAt, schedule.scheduledLabel)}.`
+      };
+    }
+  }
+
+  const scheduleMatch = normalized.match(/(?:put|move|schedule)\s+(.+?)\s+(?:on|onto|for|at|to)\s+(.+)/);
+  if (scheduleMatch) {
+    const taskTitle = resolveTaskReference(scheduleMatch[1], activeTaskTitle);
+    const schedule = parseTaskSchedulePhrase(scheduleMatch[2]);
+    if (taskTitle && schedule) {
+      setTaskPlanningState(taskTitle, schedule);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `locked. ${taskTitle} is on the plan for ${formatTaskScheduleLabel(schedule.scheduledAt, schedule.scheduledLabel)}.`
+      };
+    }
+  }
+
+  if (/(?:clear|remove|delete)\s+(?:the\s+)?(?:schedule|today(?:'s)?\s+plan)/.test(normalized) && activeTaskTitle) {
+    setTaskPlanningState(activeTaskTitle, {
+      scheduledAt: 0,
+      scheduledLabel: ""
+    });
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `cleared the schedule for ${activeTaskTitle}.`
+    };
+  }
+
+  if (/(?:clear|remove|delete)\s+(?:the\s+)?milestone/.test(normalized) && activeTaskTitle) {
+    setTaskPlanningState(activeTaskTitle, { milestone: "" });
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `cleared the milestone for ${activeTaskTitle}.`
+    };
+  }
+
   const nextActionMatch = normalized.match(/(?:set|make|change|update)\s+(?:the\s+)?(?:next\s+(?:step|move|action))(?:\s+for\s+(.+?))?\s+(?:to|as)\s+(.+)/);
   if (nextActionMatch) {
     const taskTitle = resolveTaskReference(nextActionMatch[1] || activeTaskTitle || "", activeTaskTitle);
@@ -1833,6 +1911,13 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: buildDailyBriefingReply()
+    };
+  }
+
+  if (/(?:what(?:'s| is) on today(?:'s)? plan|show me today(?:'s)? plan|today(?:'s)? plan)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getTodayPlanCommandReply()
     };
   }
 
@@ -2805,6 +2890,26 @@ function formatTaskReminderSummary(entry) {
   return cadence ? `${label} · repeats ${cadence}` : label;
 }
 
+function isTaskScheduledForDay(entry, dayStart = getTodayStartTimestamp()) {
+  const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+  return Boolean(scheduledAt && scheduledAt >= dayStart && scheduledAt < dayStart + 86400000);
+}
+
+function getTaskScheduleBucket(entry) {
+  const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+  if (!scheduledAt) {
+    return "";
+  }
+  const hour = new Date(scheduledAt).getHours();
+  if (hour < 12) {
+    return "morning";
+  }
+  if (hour < 17) {
+    return "afternoon";
+  }
+  return "evening";
+}
+
 function getTaskDependencyState(entry, userId = getCurrentUserId()) {
   const dependencies = normalizeTaskDependencyList(entry?.dependsOn);
   const blocking = dependencies.filter((depTitle) => {
@@ -2837,11 +2942,15 @@ function getTaskBoardRank(entry, userId = getCurrentUserId()) {
   const overdueReminder = isTaskReminderOverdue(entry);
   const dueSoon = Number(entry?.dueAt || 0) && Number(entry.dueAt) <= Date.now() + 6 * 60 * 60 * 1000;
   const focusToday = normalizeTaskFocusLabel(entry?.focusLabel) === "today" || normalizeTaskFocusLabel(entry?.focusLabel) === "tonight";
+  const scheduledToday = isTaskScheduledForDay(entry);
+  const scheduledSoon = Number(entry?.scheduledAt || 0) && Number(entry.scheduledAt) <= Date.now() + 4 * 60 * 60 * 1000;
   const priority = normalizeTaskPriority(entry?.priority);
   let score = 0;
   score += overdueReminder ? 90 : 0;
   score += dueSoon ? 70 : 0;
   score += focusToday ? 50 : 0;
+  score += scheduledToday ? 55 : 0;
+  score += scheduledSoon ? 20 : 0;
   score += priority === "top" ? 40 : priority === "high" ? 20 : 0;
   score += normalizeTaskWorkflowStatus(entry?.workflowStatus) === "active" ? 10 : 0;
   score += getTaskProgressValue(entry) >= 60 ? 6 : 0;
@@ -2909,6 +3018,62 @@ function buildDailyBriefingReply(userId = getCurrentUserId()) {
 function getTodayStartTimestamp() {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function getTodayPlanData(userId = getCurrentUserId()) {
+  const entries = getTaskEntriesForUser(userId).filter((entry) => entry?.title && !entry.completed);
+  const todayStart = getTodayStartTimestamp();
+  const todayEnd = todayStart + 86400000;
+  const planned = entries
+    .filter((entry) => {
+      const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+      return scheduledAt >= todayStart && scheduledAt < todayEnd;
+    })
+    .sort((a, b) => {
+      const tsDiff = (Number(a?.scheduledAt || 0) || 0) - (Number(b?.scheduledAt || 0) || 0);
+      return tsDiff || getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId);
+    });
+
+  const carryOver = entries
+    .filter((entry) => {
+      const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+      return scheduledAt && scheduledAt < todayStart;
+    })
+    .sort((a, b) => (Number(a?.scheduledAt || 0) || 0) - (Number(b?.scheduledAt || 0) || 0));
+
+  const milestoneNames = Array.from(new Set(planned.map((entry) => normalizeTaskMilestone(entry.milestone)).filter(Boolean))).slice(0, 3);
+  const summary = !planned.length
+    ? carryOver.length
+      ? `${carryOver.length} carryover task${carryOver.length === 1 ? "" : "s"} need to be re-slotted today.`
+      : "today plan is open — schedule a task onto it."
+    : `today plan has ${planned.length} task${planned.length === 1 ? "" : "s"}${milestoneNames.length ? ` across ${milestoneNames.join(", ")}` : ""}.`;
+
+  return {
+    summary,
+    planned: planned.map((entry) => ({
+      title: entry.title,
+      time: formatTaskScheduleLabel(entry.scheduledAt, entry.scheduledLabel),
+      bucket: getTaskScheduleBucket(entry),
+      next: getTaskNextActionText(entry),
+      milestone: normalizeTaskMilestone(entry.milestone),
+      meta: buildTaskExecutionParts(entry).filter((item) => !item.startsWith("next ")).slice(0, 2)
+    })),
+    carryOver: carryOver.slice(0, 3).map((entry) => entry.title),
+    milestones: milestoneNames
+  };
+}
+
+function buildTodayPlanReply(userId = getCurrentUserId()) {
+  const todayPlan = getTodayPlanData(userId);
+  if (!todayPlan.planned.length) {
+    return todayPlan.summary;
+  }
+  const lines = todayPlan.planned
+    .slice(0, 5)
+    .map((item) => `${item.time}: ${item.title} → ${item.next}`)
+    .join("; ");
+  const carryText = todayPlan.carryOver.length ? ` Carryover: ${todayPlan.carryOver.join(", ")}.` : "";
+  return `${todayPlan.summary} ${lines}.${carryText}`.trim();
 }
 
 function getBoardStandupData(userId = getCurrentUserId()) {
@@ -3084,6 +3249,94 @@ function formatTaskDueLabel(dueAt, dueLabel = "") {
   return `${dateLabel} ${timeLabel}`;
 }
 
+function normalizeTaskMilestone(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^(?:the\s+)?/, "")
+    .replace(/\s+milestone$/, "")
+    .slice(0, 80);
+}
+
+function getDefaultScheduledTimestamp(cleaned, now = new Date()) {
+  const scheduled = new Date(now);
+  scheduled.setSeconds(0, 0);
+
+  if (/\btomorrow\b/.test(cleaned)) {
+    scheduled.setDate(scheduled.getDate() + 1);
+  }
+
+  if (/\bmorning\b/.test(cleaned)) {
+    scheduled.setHours(10, 0, 0, 0);
+  } else if (/\bafternoon\b/.test(cleaned)) {
+    scheduled.setHours(15, 0, 0, 0);
+  } else if (/\bevening\b/.test(cleaned)) {
+    scheduled.setHours(19, 0, 0, 0);
+  } else if (/\btonight\b/.test(cleaned)) {
+    scheduled.setHours(20, 0, 0, 0);
+  } else if (/\b(?:right now|now)\b/.test(cleaned)) {
+    const roundedMinutes = Math.ceil(now.getMinutes() / 15) * 15;
+    if (roundedMinutes >= 60) {
+      scheduled.setHours(scheduled.getHours() + 1, 0, 0, 0);
+    } else {
+      scheduled.setMinutes(roundedMinutes, 0, 0);
+    }
+  } else {
+    const nextHour = new Date(now);
+    nextHour.setMinutes(0, 0, 0);
+    nextHour.setHours(nextHour.getHours() + 1);
+    scheduled.setTime(nextHour.getTime());
+    if (/\btomorrow\b/.test(cleaned) && scheduled.getHours() < 9) {
+      scheduled.setHours(10, 0, 0, 0);
+    }
+  }
+
+  if (!/\btomorrow\b/.test(cleaned) && scheduled.getTime() < Date.now() - 5 * 60 * 1000) {
+    scheduled.setHours(scheduled.getHours() + 1);
+  }
+
+  return scheduled.getTime();
+}
+
+function parseTaskSchedulePhrase(rawText) {
+  const cleaned = String(rawText || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^[\s,:-]+/, "")
+    .replace(/[.?!]+$/, "")
+    .replace(/today'?s\s+plan/g, "today")
+    .replace(/first thing tomorrow/g, "tomorrow morning");
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const parsedDue = parseTaskDuePhrase(cleaned);
+  if (parsedDue?.dueAt) {
+    return {
+      scheduledAt: Number(parsedDue.dueAt || 0) || 0,
+      scheduledLabel: cleaned
+    };
+  }
+
+  if (/\b(today|tomorrow|tonight|morning|afternoon|evening|right now|now)\b/.test(cleaned)) {
+    return {
+      scheduledAt: getDefaultScheduledTimestamp(cleaned),
+      scheduledLabel: cleaned
+    };
+  }
+
+  return null;
+}
+
+function formatTaskScheduleLabel(scheduledAt, scheduledLabel = "") {
+  const timestamp = Number(scheduledAt || 0) || 0;
+  if (!timestamp) {
+    return String(scheduledLabel || "").trim().toLowerCase();
+  }
+  return formatTaskDueLabel(timestamp, scheduledLabel);
+}
+
 function buildTaskOwnershipParts(entry) {
   const parts = [];
   const priority = normalizeTaskPriority(entry?.priority);
@@ -3098,6 +3351,16 @@ function buildTaskOwnershipParts(entry) {
   const focusLabel = normalizeTaskFocusLabel(entry?.focusLabel);
   if (focusLabel) {
     parts.push(`focus ${focusLabel}`);
+  }
+
+  const milestone = normalizeTaskMilestone(entry?.milestone);
+  if (milestone) {
+    parts.push(`milestone ${milestone}`);
+  }
+
+  const scheduleText = formatTaskScheduleLabel(entry?.scheduledAt, entry?.scheduledLabel);
+  if (scheduleText) {
+    parts.push(`plan ${scheduleText}`);
   }
 
   const dueText = formatTaskDueLabel(entry?.dueAt, entry?.dueLabel);
@@ -3162,12 +3425,15 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     subtasks: normalizeSubtaskList(entry.subtasks),
     priority: normalizeTaskPriority(entry.priority),
     focusLabel: normalizeTaskFocusLabel(entry.focusLabel),
+    milestone: normalizeTaskMilestone(entry.milestone),
     workflowStatus: normalizeTaskWorkflowStatus(entry.workflowStatus || (entry.completed ? "done" : "queued")),
     nextAction: normalizeTaskTextField(entry.nextAction || "", 180),
     blocker: normalizeTaskTextField(entry.blocker || "", 180),
     progress: normalizeTaskProgress(entry.progress),
     sessionStartedAt: Number(entry.sessionStartedAt || 0) || 0,
     sessionEndsAt: Number(entry.sessionEndsAt || 0) || 0,
+    scheduledAt: Number(entry.scheduledAt || 0) || 0,
+    scheduledLabel: normalizeTaskTextField(entry.scheduledLabel || "", 120),
     reminderAt: Number(entry.reminderAt || 0) || 0,
     reminderLabel: normalizeTaskTextField(entry.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(entry.reminderCadence),
@@ -3197,12 +3463,15 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     subtasks: normalizeSubtaskList(nextValue?.subtasks),
     priority: normalizeTaskPriority(nextValue?.priority),
     focusLabel: normalizeTaskFocusLabel(nextValue?.focusLabel),
+    milestone: normalizeTaskMilestone(nextValue?.milestone),
     workflowStatus: normalizeTaskWorkflowStatus(nextValue?.workflowStatus || (nextValue?.completed ? "done" : "queued")),
     nextAction: normalizeTaskTextField(nextValue?.nextAction || "", 180),
     blocker: normalizeTaskTextField(nextValue?.blocker || "", 180),
     progress: normalizeTaskProgress(nextValue?.progress),
     sessionStartedAt: Number(nextValue?.sessionStartedAt || 0) || 0,
     sessionEndsAt: Number(nextValue?.sessionEndsAt || 0) || 0,
+    scheduledAt: Number(nextValue?.scheduledAt || 0) || 0,
+    scheduledLabel: normalizeTaskTextField(nextValue?.scheduledLabel || "", 120),
     reminderAt: Number(nextValue?.reminderAt || 0) || 0,
     reminderLabel: normalizeTaskTextField(nextValue?.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(nextValue?.reminderCadence),
@@ -3256,11 +3525,22 @@ function setTaskOwnershipState(title, fields, userId = getCurrentUserId()) {
       ...fields,
       priority: fields?.priority ?? current.priority,
       focusLabel: fields?.focusLabel ?? current.focusLabel,
+      milestone: fields?.milestone ?? current.milestone,
+      scheduledAt: fields?.scheduledAt ?? current.scheduledAt,
+      scheduledLabel: fields?.scheduledLabel ?? current.scheduledLabel,
       dueAt: fields?.dueAt ?? current.dueAt,
       dueLabel: fields?.dueLabel ?? current.dueLabel
     }),
     userId
   );
+}
+
+function setTaskPlanningState(title, fields, userId = getCurrentUserId()) {
+  return setTaskOwnershipState(title, {
+    milestone: fields?.milestone,
+    scheduledAt: fields?.scheduledAt,
+    scheduledLabel: fields?.scheduledLabel
+  }, userId);
 }
 
 function setTaskExecutionState(title, fields, userId = getCurrentUserId()) {
@@ -3968,6 +4248,7 @@ function buildMessagesForApi() {
     .join("\n");
   const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
   const dailyBriefingSummary = buildDailyBriefingReply(currentUserId);
+  const todayPlanSummary = buildTodayPlanReply(currentUserId);
   const standupSummary = buildBoardStandupReply(currentUserId);
   const timelineSummary = getBoardTimelineData(currentUserId, 4).map((item) => `- ${item.title} · ${item.kind} · ${formatRelativeTime(Date.now() - item.ts)} · ${item.detail}`).join("\n");
   const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
@@ -4023,7 +4304,7 @@ function buildMessagesForApi() {
   if (getCurrentPageLabel() === "task") {
     sysParts.push("the user is currently inside the task workspace for the active task above. default to helping with that task and do not ask which task they mean unless they explicitly name a different one.");
     sysParts.push("for task help, keep replies short by default, usually 1 to 3 sentences or a tight bullet list. only go long when the user asks for detail or the problem genuinely needs it.");
-    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', 'progress:', or 'reminder:' and the app will save them.");
+    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', 'progress:', 'reminder:', 'milestone:', or 'schedule:' and the app will save them.");
   }
   sysParts.push("for normal conversation, keep replies tight by default: usually 1 to 3 short sentences unless the user explicitly asks for depth.");
   sysParts.push("if the user greets you or checks in without giving direction, respond proactively using their current task board or to-do list. suggest 1 to 3 concrete next moves or ask them to pick one. do not give a generic greeting with no direction.");
@@ -4035,6 +4316,9 @@ function buildMessagesForApi() {
   }
   if (dailyBriefingSummary) {
     sysParts.push(`daily board briefing: ${dailyBriefingSummary}`);
+  }
+  if (todayPlanSummary) {
+    sysParts.push(`today plan: ${todayPlanSummary}`);
   }
   if (standupSummary) {
     sysParts.push(`daily standup: ${standupSummary}`);
@@ -4350,6 +4634,22 @@ function maybeApplyTaskWorkspaceSuggestionsFromAnna(text) {
     }
   }
 
+  const milestoneMatch = String(text || "").match(/(?:^|\n)milestone:\s*(.{1,80})/i);
+  const milestoneText = normalizeTaskMilestone(milestoneMatch?.[1] || "");
+  if (milestoneText && milestoneText !== readTaskEntry(activeTitle).milestone) {
+    setTaskPlanningState(activeTitle, { milestone: milestoneText });
+    changed = true;
+  }
+
+  const scheduleMatch = String(text || "").match(/(?:^|\n)schedule:\s*(.{1,120})/i);
+  if (scheduleMatch) {
+    const parsedSchedule = parseTaskSchedulePhrase(scheduleMatch[1]);
+    if (parsedSchedule) {
+      setTaskPlanningState(activeTitle, parsedSchedule);
+      changed = true;
+    }
+  }
+
   if (changed) {
     renderTaskWorkspace();
     renderStartupDashboard();
@@ -4414,7 +4714,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupStandupSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupStandupSummary && !startupTodayPlanSummary) {
     return;
   }
 
@@ -4423,6 +4723,7 @@ function renderStartupDashboard() {
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
   const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
   const briefing = getDailyBriefingData(userId);
+  const todayPlan = getTodayPlanData(userId);
   const standup = getBoardStandupData(userId);
   const timeline = getBoardTimelineData(userId, 6);
 
@@ -4478,6 +4779,56 @@ function renderStartupDashboard() {
   }
   if (startupStandupSummary) {
     startupStandupSummary.textContent = buildBoardStandupReply(userId);
+  }
+  if (startupTodayPlanSummary) {
+    startupTodayPlanSummary.textContent = todayPlan.summary;
+  }
+  if (startupTodayPlanList) {
+    startupTodayPlanList.innerHTML = "";
+    if (!todayPlan.planned.length) {
+      const empty = document.createElement("div");
+      empty.className = "startup-plan-item is-empty";
+      empty.textContent = todayPlan.carryOver.length
+        ? `carryover: ${todayPlan.carryOver.join(" · ")}`
+        : "nothing scheduled yet — tell anna to put a task on today's plan.";
+      startupTodayPlanList.appendChild(empty);
+    } else {
+      todayPlan.planned.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "startup-plan-item";
+
+        const timeEl = document.createElement("div");
+        timeEl.className = "startup-plan-time";
+        timeEl.textContent = item.time;
+
+        const mainEl = document.createElement("div");
+        mainEl.className = "startup-plan-main";
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "startup-plan-title";
+        titleEl.textContent = item.title;
+
+        const metaParts = [
+          item.bucket,
+          item.milestone ? `milestone ${item.milestone}` : "",
+          item.next ? `next ${item.next}` : "",
+          ...item.meta
+        ].filter(Boolean).slice(0, 3);
+
+        mainEl.appendChild(titleEl);
+
+        if (metaParts.length) {
+          const metaEl = document.createElement("div");
+          metaEl.className = "startup-plan-meta";
+          metaEl.textContent = metaParts.join(" · ");
+          mainEl.appendChild(metaEl);
+        }
+
+        row.appendChild(timeEl);
+        row.appendChild(mainEl);
+        startupTodayPlanList.appendChild(row);
+      });
+    }
   }
   if (startupTimelineList) {
     startupTimelineList.innerHTML = "";
