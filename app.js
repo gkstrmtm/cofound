@@ -430,15 +430,7 @@ function stopSpeechRecognizer() {
   if (!speechRecognizer) {
     return;
   }
-  try {
-    speechRecognizer.abort();
-  } catch {
-    try {
-      speechRecognizer.stop();
-    } catch {
-      // ignore
-    }
-  }
+  resetSpeechRecognizer();
 }
 
 function clearWakeWordRestart() {
@@ -3756,9 +3748,8 @@ function setListening(isListening) {
     ensureStartedUi();
     scrollTranscriptIfNeeded();
 
-    if (!speechRecognizer) {
-      speechRecognizer = ensureSpeechRecognizer();
-    }
+    resetSpeechRecognizer();
+    speechRecognizer = ensureSpeechRecognizer();
 
     if (speechRecognizer) {
       try {
