@@ -926,6 +926,32 @@ function wantsClearTodoList(text) {
   return /get rid of|start over|replace|clear|remove|delete|wipe|reset|archive/.test(normalized);
 }
 
+function wantsShowTodoList(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized || !mentionsTodoList(normalized)) {
+    return false;
+  }
+  return /\b(show|open|pull up|bring up|display|see|view|check)\b/.test(normalized) || /what(?:'s| is) on/.test(normalized);
+}
+
+function openCurrentTodoListSheet() {
+  const latest = getLatestStartupListForUser();
+  const items = Array.isArray(latest?.items) ? latest.items.map((item) => normalizeTaskTitle(item)).filter(Boolean) : [];
+  if (!items.length || !listSheetBody || !listSheetTitle) {
+    return false;
+  }
+
+  const extracted = {
+    title: String(latest?.title || "to do").trim().toLowerCase() || "to do",
+    items
+  };
+
+  listSheetTitle.textContent = extracted.title;
+  renderSheetList(extracted);
+  setListSheetOpen(true);
+  return true;
+}
+
 function clearCurrentStartupList(options = {}) {
   const userId = getCurrentUserId();
   const currentItems = getLatestStartupItems(userId).map((item) => normalizeTaskTitle(item)).filter(Boolean);
@@ -1033,6 +1059,14 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: `marked ${incompleteEntries.length} task${incompleteEntries.length === 1 ? "" : "s"} done.`
+    };
+  }
+
+  if (wantsShowTodoList(normalized)) {
+    const opened = openCurrentTodoListSheet();
+    return {
+      handled: true,
+      reply: opened ? "here's your to-do list." : "you don't have a to-do list yet."
     };
   }
 
@@ -1155,9 +1189,6 @@ function maybeResumeListeningAfterReply() {
     return;
   }
   if (annaReplyInFlight) {
-    return;
-  }
-  if (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0) {
     return;
   }
   if (singleTurnVoiceMode) {
@@ -4034,7 +4065,7 @@ function ensureSpeechRecognizer() {
   recognizer.onresult = (event) => {
     speechStartConfirmed = true;
     clearSpeechStartTimer();
-    let nextInterim = "";
+    const interimParts = [];
     const finalizedParts = [];
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const result = event.results[i];
@@ -4046,13 +4077,19 @@ function ensureSpeechRecognizer() {
       if (result.isFinal) {
         finalizedParts.push(text);
       } else {
-        nextInterim = text;
+        interimParts.push(text);
       }
+    }
+
+    const nextInterim = normalizeBufferedSpeechParts(interimParts);
+
+    if ((nextInterim || finalizedParts.length) && (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0)) {
+      stopAllTts();
+      clearAudioNotice();
     }
 
     if (finalizedParts.length) {
       finalSpeechBuffer = normalizeBufferedSpeechParts([finalSpeechBuffer, ...finalizedParts]);
-      nextInterim = "";
     }
 
     interimText = nextInterim;
