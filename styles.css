@@ -337,6 +337,68 @@ button {
   margin: 0.6rem 0 0.85rem;
 }
 
+.startup-briefing-card {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(126, 178, 88, 0.14));
+  border: 1px solid rgba(96, 142, 60, 0.22);
+  box-shadow: 0 16px 34px rgba(39, 72, 0, 0.08);
+}
+
+.startup-briefing-eyebrow {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.startup-briefing-summary {
+  margin-top: 0.35rem;
+  color: var(--olive);
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.startup-briefing-alerts,
+.startup-briefing-focus {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
+.startup-briefing-alert,
+.startup-briefing-focus-item {
+  padding: 0.8rem 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-briefing-alert {
+  color: var(--olive-deep);
+  font-weight: 700;
+}
+
+.startup-briefing-alert.is-warning {
+  border-color: rgba(255, 154, 83, 0.3);
+  background: rgba(255, 154, 83, 0.12);
+}
+
+.startup-briefing-focus-title {
+  color: var(--olive);
+  font-weight: 800;
+}
+
+.startup-briefing-focus-next,
+.startup-briefing-focus-meta {
+  margin-top: 0.24rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 .startup-tasks {
   display: grid;
   gap: 0.6rem;

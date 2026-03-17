@@ -19,6 +19,9 @@ const taskContextBackLink = document.getElementById("taskContextBackLink");
 const startupNameText = document.getElementById("startupNameText");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const projectsLeftEl = document.getElementById("projectsLeft");
+const startupBriefingSummary = document.getElementById("startupBriefingSummary");
+const startupBoardAlerts = document.getElementById("startupBoardAlerts");
+const startupFocusList = document.getElementById("startupFocusList");
 const startupTasksEl = document.getElementById("startupTasks");
 
 const taskStage = document.getElementById("taskStage");
@@ -1135,6 +1138,7 @@ function renameTaskEverywhere(fromTitle, toTitle, userId = getCurrentUserId()) {
     reminderLabel: normalizeTaskTextField(existing?.reminderLabel || current.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(existing?.reminderCadence || current.reminderCadence),
     lastReminderAt: Number(existing?.lastReminderAt ?? current.lastReminderAt ?? 0) || 0,
+    dependsOn: normalizeTaskDependencyList(existing?.dependsOn || current.dependsOn),
     dueAt: Number(existing?.dueAt ?? current.dueAt ?? 0) || 0,
     dueLabel: String(existing?.dueLabel || current.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Date.now()
@@ -1787,6 +1791,46 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: getOverdueFollowupReply()
+    };
+  }
+
+  const dependencyMatch = normalized.match(/(.+?)\s+(?:depends on|is waiting on|waits on)\s+(.+)/);
+  if (dependencyMatch) {
+    const taskTitle = resolveTaskReference(dependencyMatch[1], activeTaskTitle);
+    const dependencyTitle = resolveTaskReference(dependencyMatch[2], "", getCurrentUserId());
+    if (taskTitle && dependencyTitle && taskTitle !== dependencyTitle) {
+      updateTaskEntry(taskTitle, (current) => ({
+        ...current,
+        dependsOn: normalizeTaskDependencyList([...(current.dependsOn || []), dependencyTitle]),
+        workflowStatus: current.completed ? "done" : "blocked"
+      }));
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `got it. ${taskTitle} now depends on ${dependencyTitle}.`
+      };
+    }
+  }
+
+  const clearDependencyMatch = normalized.match(/(?:clear|remove|delete)\s+(?:the\s+)?dependency\s+(?:on\s+)?(.+)/);
+  if (clearDependencyMatch && activeTaskTitle) {
+    const dependencyTitle = resolveTaskReference(clearDependencyMatch[1], "", getCurrentUserId());
+    updateTaskEntry(activeTaskTitle, (current) => ({
+      ...current,
+      dependsOn: normalizeTaskDependencyList((current.dependsOn || []).filter((title) => title !== dependencyTitle)),
+      workflowStatus: current.completed ? "done" : normalizeTaskDependencyList((current.dependsOn || []).filter((title) => title !== dependencyTitle)).length ? current.workflowStatus : "queued"
+    }));
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `removed that dependency from ${activeTaskTitle}.`
+    };
+  }
+
+  if (/(?:daily briefing|brief me|what should i work on today|what do i hit today|what's the board look like)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: buildDailyBriefingReply()
     };
   }
 
@@ -2697,6 +2741,13 @@ function normalizeTaskReminderCadence(value) {
   return "";
 }
 
+function normalizeTaskDependencyList(rawList) {
+  if (!Array.isArray(rawList)) {
+    return [];
+  }
+  return Array.from(new Set(rawList.map((item) => normalizeTaskTitle(item)).filter(Boolean))).slice(0, 8);
+}
+
 function getNextReminderTimestampFromCadence(reminderAt, cadence) {
   const base = Number(reminderAt || 0) || 0;
   const normalizedCadence = normalizeTaskReminderCadence(cadence);
@@ -2735,6 +2786,107 @@ function formatTaskReminderSummary(entry) {
     return cadence ? `overdue since ${label} · repeats ${cadence}` : `overdue since ${label}`;
   }
   return cadence ? `${label} · repeats ${cadence}` : label;
+}
+
+function getTaskDependencyState(entry, userId = getCurrentUserId()) {
+  const dependencies = normalizeTaskDependencyList(entry?.dependsOn);
+  const blocking = dependencies.filter((depTitle) => {
+    const dep = readTaskEntry(depTitle, userId);
+    return dep.title && !dep.completed;
+  });
+  return {
+    dependencies,
+    blocking,
+    ready: !blocking.length
+  };
+}
+
+function buildTaskDependencySummary(entry, userId = getCurrentUserId()) {
+  const dependencyState = getTaskDependencyState(entry, userId);
+  if (!dependencyState.dependencies.length) {
+    return "";
+  }
+  if (dependencyState.blocking.length) {
+    return `waiting on ${dependencyState.blocking.join(", ")}`;
+  }
+  return `deps clear: ${dependencyState.dependencies.join(", ")}`;
+}
+
+function getTaskBoardRank(entry, userId = getCurrentUserId()) {
+  if (!entry || entry.completed) {
+    return -999;
+  }
+  const dependencyState = getTaskDependencyState(entry, userId);
+  const overdueReminder = isTaskReminderOverdue(entry);
+  const dueSoon = Number(entry?.dueAt || 0) && Number(entry.dueAt) <= Date.now() + 6 * 60 * 60 * 1000;
+  const focusToday = normalizeTaskFocusLabel(entry?.focusLabel) === "today" || normalizeTaskFocusLabel(entry?.focusLabel) === "tonight";
+  const priority = normalizeTaskPriority(entry?.priority);
+  let score = 0;
+  score += overdueReminder ? 90 : 0;
+  score += dueSoon ? 70 : 0;
+  score += focusToday ? 50 : 0;
+  score += priority === "top" ? 40 : priority === "high" ? 20 : 0;
+  score += normalizeTaskWorkflowStatus(entry?.workflowStatus) === "active" ? 10 : 0;
+  score += getTaskProgressValue(entry) >= 60 ? 6 : 0;
+  score -= dependencyState.blocking.length ? 45 : 0;
+  score -= normalizeTaskWorkflowStatus(entry?.workflowStatus) === "blocked" ? 20 : 0;
+  return score;
+}
+
+function getDailyBriefingData(userId = getCurrentUserId()) {
+  const entries = getTaskEntriesForUser(userId).filter((entry) => entry?.title && !entry.completed);
+  const ranked = [...entries].sort((a, b) => getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId));
+  const focus = ranked.slice(0, 3).map((entry) => {
+    const dependencySummary = buildTaskDependencySummary(entry, userId);
+    return {
+      title: entry.title,
+      next: getTaskNextActionText(entry),
+      meta: [
+        ...buildTaskOwnershipParts(entry),
+        ...buildTaskExecutionParts(entry).filter((item) => !item.startsWith("next ")),
+        dependencySummary
+      ].filter(Boolean).slice(0, 3)
+    };
+  });
+
+  const overdue = entries.filter((entry) => isTaskReminderOverdue(entry)).map((entry) => entry.title);
+  const blocked = entries
+    .map((entry) => ({ title: entry.title, blockedBy: getTaskDependencyState(entry, userId).blocking }))
+    .filter((entry) => entry.blockedBy.length)
+    .slice(0, 3);
+
+  const alerts = [];
+  if (overdue.length) {
+    alerts.push(`${overdue.length} overdue follow-up${overdue.length === 1 ? "" : "s"}`);
+  }
+  if (blocked.length) {
+    alerts.push(`${blocked.length} task${blocked.length === 1 ? " is" : "s are"} waiting on dependencies`);
+  }
+  if (!alerts.length && focus.length) {
+    alerts.push("board looks clean — pick a focus task and move it today");
+  }
+
+  const summary = !focus.length
+    ? "no active tasks yet — ask anna for a to-do list and she’ll line up the board."
+    : `top move${focus.length === 1 ? "" : "s"} today: ${focus.map((item) => item.title).join(", ")}.`;
+
+  return {
+    summary,
+    alerts,
+    focus,
+    overdue,
+    blocked
+  };
+}
+
+function buildDailyBriefingReply(userId = getCurrentUserId()) {
+  const briefing = getDailyBriefingData(userId);
+  if (!briefing.focus.length) {
+    return briefing.summary;
+  }
+  const focusLines = briefing.focus.map((item) => `${item.title} → ${item.next}`).join("; ");
+  const alertText = briefing.alerts.length ? ` ${briefing.alerts.join(". ")}.` : "";
+  return `${briefing.summary} ${focusLines}.${alertText}`.trim();
 }
 
 function parseTaskReminderPhrase(rawText) {
@@ -2881,6 +3033,10 @@ function buildTaskExecutionParts(entry) {
   if (sprint !== "not running") {
     parts.push(sprint);
   }
+  const dependencySummary = buildTaskDependencySummary(entry);
+  if (dependencySummary) {
+    parts.push(dependencySummary);
+  }
   const reminder = formatTaskReminderSummary(entry);
   if (reminder && reminder !== "no follow-up set") {
     parts.push(`follow up ${reminder}`);
@@ -2911,6 +3067,7 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     reminderLabel: normalizeTaskTextField(entry.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(entry.reminderCadence),
     lastReminderAt: Number(entry.lastReminderAt || 0) || 0,
+    dependsOn: normalizeTaskDependencyList(entry.dependsOn),
     dueAt: Number(entry.dueAt || 0) || 0,
     dueLabel: String(entry.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Number(entry.updatedAt || 0) || 0
@@ -2945,6 +3102,7 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     reminderLabel: normalizeTaskTextField(nextValue?.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(nextValue?.reminderCadence),
     lastReminderAt: Number(nextValue?.lastReminderAt || 0) || 0,
+    dependsOn: normalizeTaskDependencyList(nextValue?.dependsOn),
     dueAt: Number(nextValue?.dueAt || 0) || 0,
     dueLabel: String(nextValue?.dueLabel || "").trim().toLowerCase().slice(0, 80),
     updatedAt: Date.now()
@@ -3704,6 +3862,7 @@ function buildMessagesForApi() {
     .map((title) => `${readTaskEntry(title, currentUserId).completed ? "[done]" : "[todo]"} ${title}`)
     .join("\n");
   const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
+  const dailyBriefingSummary = buildDailyBriefingReply(currentUserId);
   const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
   const activeTaskNotes = String(activeTaskState?.notes || "").trim();
   const activeSubtasks = Array.isArray(activeTaskState?.subtasks)
@@ -3766,6 +3925,9 @@ function buildMessagesForApi() {
   }
   if (taskBoardContext) {
     sysParts.push("full saved task board with completion state, operator state, subtasks, and notes:\n" + taskBoardContext);
+  }
+  if (dailyBriefingSummary) {
+    sysParts.push(`daily board briefing: ${dailyBriefingSummary}`);
   }
   if (activeTaskNotes) {
     sysParts.push(`active task notes:\n${activeTaskNotes.slice(0, 900)}`);
@@ -4139,7 +4301,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary) {
     return;
   }
 
@@ -4147,6 +4309,7 @@ function renderStartupDashboard() {
   const latest = getLatestStartupListForUser(userId);
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
   const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
+  const briefing = getDailyBriefingData(userId);
 
   if (projectsLeftEl) {
     projectsLeftEl.textContent = String(remainingCount);
@@ -4157,6 +4320,46 @@ function renderStartupDashboard() {
     lastUpdatedEl.textContent = latestActivityTs
       ? formatRelativeTime(Date.now() - Number(latestActivityTs))
       : "not yet";
+  }
+
+  if (startupBriefingSummary) {
+    startupBriefingSummary.textContent = briefing.summary;
+  }
+  if (startupBoardAlerts) {
+    startupBoardAlerts.innerHTML = "";
+    briefing.alerts.forEach((alertText) => {
+      const alert = document.createElement("div");
+      alert.className = `startup-briefing-alert${/overdue|waiting on/.test(alertText) ? " is-warning" : ""}`;
+      alert.textContent = alertText;
+      startupBoardAlerts.appendChild(alert);
+    });
+  }
+  if (startupFocusList) {
+    startupFocusList.innerHTML = "";
+    briefing.focus.forEach((item) => {
+      const card = document.createElement("div");
+      card.className = "startup-briefing-focus-item";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "startup-briefing-focus-title";
+      titleEl.textContent = item.title;
+
+      const nextEl = document.createElement("div");
+      nextEl.className = "startup-briefing-focus-next";
+      nextEl.textContent = `next: ${item.next}`;
+
+      card.appendChild(titleEl);
+      card.appendChild(nextEl);
+
+      if (item.meta.length) {
+        const meta = document.createElement("div");
+        meta.className = "startup-briefing-focus-meta";
+        meta.textContent = item.meta.join(" · ");
+        card.appendChild(meta);
+      }
+
+      startupFocusList.appendChild(card);
+    });
   }
 
   if (!startupTasksEl) {
