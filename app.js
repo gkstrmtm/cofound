@@ -4106,7 +4106,7 @@ inlineVoiceButton?.addEventListener("pointerdown", () => {
 
 inlineVoiceButton?.addEventListener("click", (event) => {
   event.preventDefault();
-  startInlineVoiceCapture("tap");
+  retryVoiceCaptureFromGesture();
 });
 
 inlineVoiceClose?.addEventListener("click", () => {
