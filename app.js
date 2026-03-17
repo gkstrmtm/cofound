@@ -1031,6 +1031,195 @@ function openCurrentTodoListSheet() {
   return true;
 }
 
+function updateLatestStartupListForUser(mutator, userId = getCurrentUserId()) {
+  const log = readStartupLists();
+  const index = [...log].map((entry, idx) => ({ entry, idx })).filter(({ entry }) => String(entry?.userId || "") === userId).map(({ idx }) => idx).pop();
+  if (index == null) {
+    return null;
+  }
+
+  const current = log[index] && typeof log[index] === "object" ? log[index] : null;
+  if (!current) {
+    return null;
+  }
+
+  const nextValue = typeof mutator === "function" ? mutator(current) : mutator;
+  if (!nextValue || !Array.isArray(nextValue.items)) {
+    return null;
+  }
+
+  const next = [...log];
+  next[index] = {
+    ...current,
+    ...nextValue,
+    title: String(nextValue.title || current.title || "to do").trim().toLowerCase() || "to do",
+    items: nextValue.items.map((item) => normalizeTaskTitle(item)).filter(Boolean),
+    ts: Date.now(),
+    userId
+  };
+  writeStartupLists(next.slice(-80));
+  renderStartupDashboard();
+  renderTaskWorkspace();
+  return next[index];
+}
+
+function renameTaskEverywhere(fromTitle, toTitle, userId = getCurrentUserId()) {
+  const oldTitle = normalizeTaskTitle(fromTitle);
+  const newTitle = normalizeTaskTitle(toTitle);
+  if (!oldTitle || !newTitle || oldTitle === newTitle) {
+    return false;
+  }
+
+  const store = readTaskStateStore();
+  const userMap = store && typeof store[userId] === "object" ? { ...store[userId] } : {};
+  const oldKey = makeTaskKey(oldTitle);
+  const newKey = makeTaskKey(newTitle);
+  const current = readTaskEntry(oldTitle, userId);
+  const existing = userMap[newKey] && typeof userMap[newKey] === "object" ? userMap[newKey] : null;
+
+  userMap[newKey] = {
+    title: newTitle,
+    completed: Boolean(existing?.completed ?? current.completed),
+    notes: String(existing?.notes || current.notes || ""),
+    subtasks: normalizeSubtaskList(existing?.subtasks || current.subtasks),
+    updatedAt: Date.now()
+  };
+  delete userMap[oldKey];
+  store[userId] = userMap;
+  writeTaskStateStore(store);
+
+  updateLatestStartupListForUser((list) => ({
+    ...list,
+    items: (Array.isArray(list.items) ? list.items : []).map((item) => (normalizeTaskTitle(item) === oldTitle ? newTitle : item))
+  }), userId);
+
+  const active = readActiveTaskContext();
+  if (active?.title === oldTitle) {
+    setActiveTaskContext(newTitle);
+  }
+
+  return true;
+}
+
+function replaceWordInCurrentTodoList(fromWord, toWord, userId = getCurrentUserId()) {
+  const source = normalizeTaskTitle(fromWord);
+  const target = normalizeTaskTitle(toWord);
+  if (!source || !target || source === target) {
+    return { changed: false };
+  }
+
+  const latest = getLatestNonEmptyStartupListForUser(userId) || getLatestStartupListForUser(userId);
+  const items = Array.isArray(latest?.items) ? latest.items.map((item) => normalizeTaskTitle(item)).filter(Boolean) : [];
+  const matches = items.filter((item) => item.includes(source));
+  if (matches.length !== 1) {
+    return { changed: false, ambiguous: matches.length > 1 };
+  }
+
+  const oldTitle = matches[0];
+  const newTitle = normalizeTaskTitle(oldTitle.replace(source, target));
+  if (!newTitle || newTitle === oldTitle) {
+    return { changed: false };
+  }
+
+  return { changed: renameTaskEverywhere(oldTitle, newTitle, userId), oldTitle, newTitle };
+}
+
+function findMatchingSubtaskId(text, taskTitle = getCurrentTaskTitle(), userId = getCurrentUserId()) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  const state = readTaskEntry(taskTitle, userId);
+  const subtasks = Array.isArray(state.subtasks) ? state.subtasks : [];
+  const exact = subtasks.find((item) => normalizeTaskTitle(item.title) === normalized);
+  if (exact) {
+    return exact.id;
+  }
+  const partial = subtasks.filter((item) => normalized.includes(normalizeTaskTitle(item.title)) || normalizeTaskTitle(item.title).includes(normalized));
+  return partial.length === 1 ? partial[0].id : "";
+}
+
+function renameCurrentTaskSubtask(oldText, newText, taskTitle = getCurrentTaskTitle(), userId = getCurrentUserId()) {
+  const nextTitle = normalizeTaskTitle(newText);
+  const subtaskId = findMatchingSubtaskId(oldText, taskTitle, userId);
+  if (!taskTitle || !subtaskId || !nextTitle) {
+    return false;
+  }
+  updateTaskEntry(
+    taskTitle,
+    (current) => ({
+      ...current,
+      subtasks: normalizeSubtaskList(current.subtasks).map((item) =>
+        item.id === subtaskId ? { ...item, title: nextTitle } : item
+      )
+    }),
+    userId
+  );
+  renderTaskWorkspace();
+  renderStartupDashboard();
+  return true;
+}
+
+function markCurrentTaskSubtaskDone(text, taskTitle = getCurrentTaskTitle(), userId = getCurrentUserId()) {
+  const subtaskId = findMatchingSubtaskId(text, taskTitle, userId);
+  if (!taskTitle || !subtaskId) {
+    return false;
+  }
+  const entry = readTaskEntry(taskTitle, userId);
+  const target = entry.subtasks.find((item) => item.id === subtaskId);
+  if (!target || target.completed) {
+    return Boolean(target);
+  }
+  updateTaskEntry(
+    taskTitle,
+    (current) => ({
+      ...current,
+      subtasks: normalizeSubtaskList(current.subtasks).map((item) =>
+        item.id === subtaskId ? { ...item, completed: true } : item
+      )
+    }),
+    userId
+  );
+  renderTaskWorkspace();
+  renderStartupDashboard();
+  return true;
+}
+
+function getLatestStartupActivityTs(userId = getCurrentUserId()) {
+  const latestListTs = readStartupLists()
+    .filter((entry) => String(entry?.userId || "") === userId)
+    .reduce((maxTs, entry) => Math.max(maxTs, Number(entry?.ts || 0) || 0), 0);
+
+  const taskTs = Object.values(getTaskStateMap(userId)).reduce((maxTs, entry) => {
+    return Math.max(maxTs, Number(entry?.updatedAt || 0) || 0);
+  }, 0);
+
+  return Math.max(latestListTs, taskTs);
+}
+
+function isCasualGreeting(text) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized) {
+    return false;
+  }
+  return /^(?:hi|hey|hello|yo|sup|what(?:'s| is) up|how(?:'s| is) it going)(?:\s+anna)?$/.test(normalized);
+}
+
+function buildGreetingReply() {
+  const activeTask = getCurrentTaskTitle();
+  const startupItems = getLatestStartupItems().map((item) => normalizeTaskTitle(item)).filter(Boolean);
+  if (activeTask) {
+    const state = readTaskEntry(activeTask);
+    const subtaskPreview = state.subtasks.filter((item) => !item.completed).slice(0, 2).map((item) => item.title);
+    if (subtaskPreview.length) {
+      return `hey. we're on ${activeTask}. next up looks like ${subtaskPreview.join(" and ")}. want me to help you knock one of those out?`;
+    }
+    return `hey. we're on ${activeTask}. want me to tighten the notes, break it into steps, or help you finish it?`;
+  }
+  if (startupItems.length) {
+    const preview = startupItems.slice(0, 3).join(", ");
+    return `hey. here's where i'd start: ${preview}. want to pick one and get moving, or should i clean up the list first?`;
+  }
+  return "hey. let's get moving. want me to make your next to-do list, tighten a task, or figure out the best next step?";
+}
+
 function clearCurrentStartupList(options = {}) {
   const userId = getCurrentUserId();
   const currentItems = getLatestStartupItems(userId).map((item) => normalizeTaskTitle(item)).filter(Boolean);
@@ -1104,6 +1293,13 @@ function maybeHandleLocalVoiceCommand(text) {
     return { handled: false };
   }
 
+  if (isCasualGreeting(normalized)) {
+    return {
+      handled: true,
+      reply: buildGreetingReply()
+    };
+  }
+
   if (shouldUseWakeWordMode() && isWakeSessionExitPhrase(normalized)) {
     return {
       handled: true,
@@ -1139,6 +1335,113 @@ function maybeHandleLocalVoiceCommand(text) {
       handled: true,
       reply: `marked ${incompleteEntries.length} task${incompleteEntries.length === 1 ? "" : "s"} done.`
     };
+  }
+
+  const renameListMatch = normalized.match(/(?:rename|change|replace|edit)\s+(?:the\s+)?(?:task|item|todo|to do|step)?\s*(.+?)\s+(?:to|with)\s+(.+)/);
+  if (renameListMatch && mentionsTodoList(normalized)) {
+    const changed = renameTaskEverywhere(renameListMatch[1], renameListMatch[2]);
+    if (changed) {
+      openCurrentTodoListSheet();
+      return {
+        handled: true,
+        reply: `updated that to-do list task to ${normalizeTaskTitle(renameListMatch[2])}.`
+      };
+    }
+  }
+
+  const replaceWordMatch = normalized.match(/(?:change|replace)\s+(?:the\s+word\s+)?(.+?)\s+(?:to|with)\s+(.+)/);
+  if (replaceWordMatch && mentionsTodoList(normalized)) {
+    const result = replaceWordInCurrentTodoList(replaceWordMatch[1], replaceWordMatch[2]);
+    if (result.changed) {
+      openCurrentTodoListSheet();
+      return {
+        handled: true,
+        reply: `changed ${result.oldTitle} to ${result.newTitle}.`
+      };
+    }
+    if (result.ambiguous) {
+      return {
+        handled: true,
+        reply: "i found more than one task that matches that. say the full task name you want changed."
+      };
+    }
+  }
+
+  const removeListMatch = normalized.match(/(?:remove|delete|drop|take off)\s+(.+?)\s+(?:from\s+)?(?:my\s+|the\s+|current\s+)?(?:to\s*do\s+list|todo\s+list|list)/);
+  if (removeListMatch && mentionsTodoList(normalized)) {
+    const targetTitle = normalizeTaskTitle(removeListMatch[1]);
+    const updated = updateLatestStartupListForUser((list) => ({
+      ...list,
+      items: (Array.isArray(list.items) ? list.items : []).filter((item) => normalizeTaskTitle(item) !== targetTitle)
+    }));
+    if (updated) {
+      openCurrentTodoListSheet();
+      return {
+        handled: true,
+        reply: `removed ${targetTitle} from the to-do list.`
+      };
+    }
+  }
+
+  const addListMatch = normalized.match(/(?:add|put)\s+(.+?)\s+(?:to|onto|on)\s+(?:my\s+|the\s+|current\s+)?(?:to\s*do\s+list|todo\s+list|list)/);
+  if (addListMatch && mentionsTodoList(normalized)) {
+    const newItem = normalizeTaskTitle(addListMatch[1]);
+    const updated = updateLatestStartupListForUser((list) => ({
+      ...list,
+      items: [...(Array.isArray(list.items) ? list.items : []), newItem]
+    }));
+    if (updated) {
+      updateTaskEntry(newItem, (current) => ({ ...current, title: newItem }));
+      openCurrentTodoListSheet();
+      return {
+        handled: true,
+        reply: `added ${newItem} to the to-do list.`
+      };
+    }
+  }
+
+  const noteMatch = normalized.match(/(?:set|update|change|add)\s+(?:the\s+)?(?:working\s+)?notes?(?:\s+for\s+(?:this\s+task|the\s+task))?(?:\s+to|\s+with|\s+that\s+say)?\s+(.+)/);
+  if (noteMatch && getCurrentTaskTitle()) {
+    setTaskNotes(getCurrentTaskTitle(), noteMatch[1]);
+    renderTaskWorkspace();
+    renderStartupDashboard();
+    return {
+      handled: true,
+      reply: "updated the working notes."
+    };
+  }
+
+  const addSubtaskMatch = normalized.match(/(?:add|create)\s+(?:a\s+)?(?:subtask|step)(?:\s+called)?\s+(.+)/);
+  if (addSubtaskMatch && getCurrentTaskTitle()) {
+    addTaskSubtask(getCurrentTaskTitle(), addSubtaskMatch[1]);
+    renderTaskWorkspace();
+    renderStartupDashboard();
+    return {
+      handled: true,
+      reply: `added ${normalizeTaskTitle(addSubtaskMatch[1])} as a step.`
+    };
+  }
+
+  const renameSubtaskMatch = normalized.match(/(?:rename|change|replace)\s+(?:the\s+)?(?:subtask|step)\s+(.+?)\s+(?:to|with)\s+(.+)/);
+  if (renameSubtaskMatch && getCurrentTaskTitle()) {
+    const changed = renameCurrentTaskSubtask(renameSubtaskMatch[1], renameSubtaskMatch[2]);
+    if (changed) {
+      return {
+        handled: true,
+        reply: `updated that step to ${normalizeTaskTitle(renameSubtaskMatch[2])}.`
+      };
+    }
+  }
+
+  const doneStepMatch = normalized.match(/(?:mark|set).*(?:subtask|step)\s+(.+?)\s+(?:done|complete|completed|finished)/);
+  if (doneStepMatch && getCurrentTaskTitle()) {
+    const changed = markCurrentTaskSubtaskDone(doneStepMatch[1]);
+    if (changed) {
+      return {
+        handled: true,
+        reply: `marked ${normalizeTaskTitle(doneStepMatch[1])} done.`
+      };
+    }
   }
 
   if (wantsShowTodoList(normalized)) {
@@ -2463,6 +2766,8 @@ function buildMessagesForApi() {
     sysParts.push("for task help, keep replies short by default, usually 1 to 3 sentences or a tight bullet list. only go long when the user asks for detail or the problem genuinely needs it.");
     sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save a working note, include a line that starts with 'notes:' followed by the note.");
   }
+  sysParts.push("for normal conversation, keep replies tight by default: usually 1 to 3 short sentences unless the user explicitly asks for depth.");
+  sysParts.push("if the user greets you or checks in without giving direction, respond proactively using their current task board or to-do list. suggest 1 to 3 concrete next moves or ask them to pick one. do not give a generic greeting with no direction.");
   if (startupTaskLines) {
     sysParts.push("current startup to-do list:\n" + startupTaskLines);
   }
@@ -2817,8 +3122,9 @@ function renderStartupDashboard() {
   }
 
   if (lastUpdatedEl) {
-    lastUpdatedEl.textContent = latest?.ts
-      ? formatRelativeTime(Date.now() - Number(latest.ts))
+    const latestActivityTs = getLatestStartupActivityTs(userId);
+    lastUpdatedEl.textContent = latestActivityTs
+      ? formatRelativeTime(Date.now() - Number(latestActivityTs))
       : "not yet";
   }
 
@@ -5206,6 +5512,17 @@ function sendTypedToAnna(rawText) {
   setPendingTodoListGeneration(Boolean(preparedRequest?.todoListRequest), {
     redirectToStartup: Boolean(preparedRequest?.redirectToStartup)
   });
+
+  const localCommand = maybeHandleLocalVoiceCommand(lower);
+  if (localCommand?.handled) {
+    pushEntry("user", lower);
+    appendToMemory("user", lower);
+    if (localCommand.reply) {
+      pushEntry("ai", localCommand.reply);
+      appendToMemory("assistant", localCommand.reply);
+    }
+    return;
+  }
 
   pushEntry("user", lower);
   appendToMemory("user", lower);
