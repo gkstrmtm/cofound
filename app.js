@@ -170,6 +170,11 @@ let inlineVoiceHideTimer = null;
 let speechStartTimer = null;
 let speechStartConfirmed = false;
 let speechStartRecoveryUsed = false;
+let mediaRecorder = null;
+let mediaRecorderStream = null;
+let mediaRecorderChunks = [];
+let mediaRecorderMimeType = "";
+let mediaRecorderStopTimer = null;
 let pendingTodoListGenerationRequest = false;
 let pendingTodoListRedirectToStartup = false;
 let supabaseClient = null;
@@ -267,6 +272,13 @@ function clearSpeechStartTimer() {
   }
 }
 
+function clearMediaRecorderStopTimer() {
+  if (mediaRecorderStopTimer) {
+    window.clearTimeout(mediaRecorderStopTimer);
+    mediaRecorderStopTimer = null;
+  }
+}
+
 function stopMediaStream(stream) {
   if (!stream || typeof stream.getTracks !== "function") {
     return;
@@ -280,6 +292,7 @@ function stopMediaStream(stream) {
 
 function finalizeSpeechFailure(message, delay = 4200) {
   clearSpeechStartTimer();
+  clearMediaRecorderStopTimer();
   speechStartConfirmed = false;
   isListeningNow = false;
   persistentListeningEnabled = false;
@@ -293,7 +306,7 @@ function finalizeSpeechFailure(message, delay = 4200) {
 function getSpeechFailureMessage(errorCode, permissionState = "") {
   const code = String(errorCode || "").trim().toLowerCase();
   if (code === "not-allowed" || code === "service-not-allowed" || permissionState === "denied") {
-    return "microphone access is blocked in your browser settings. allow mic access for this site, then tap anna again.";
+    return "microphone access is blocked in chrome or mac settings. allow chrome in system settings > privacy and security > microphone, then tap anna again.";
   }
   if (code === "audio-capture") {
     return "anna couldn't find a working microphone. reconnect your mic and tap anna again.";
@@ -305,6 +318,179 @@ function getSpeechFailureMessage(errorCode, permissionState = "") {
     return "anna didn't hear anything. try again and speak right away.";
   }
   return "voice input didn't start. tap anna again.";
+}
+
+function hasRecordedVoiceFallback() {
+  return Boolean(
+    typeof window !== "undefined" &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === "function" &&
+      typeof window.MediaRecorder === "function"
+  );
+}
+
+function isRecordedVoiceCaptureActive() {
+  return Boolean(mediaRecorder && mediaRecorder.state && mediaRecorder.state !== "inactive");
+}
+
+function getPreferredRecorderMimeType() {
+  const Recorder = window.MediaRecorder;
+  if (!Recorder || typeof Recorder.isTypeSupported !== "function") {
+    return "";
+  }
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"];
+  return candidates.find((value) => Recorder.isTypeSupported(value)) || "";
+}
+
+function cleanupRecordedVoiceCapture() {
+  clearMediaRecorderStopTimer();
+  if (mediaRecorder) {
+    try {
+      mediaRecorder.ondataavailable = null;
+      mediaRecorder.onerror = null;
+      mediaRecorder.onstop = null;
+    } catch {
+      // ignore
+    }
+  }
+  stopMediaStream(mediaRecorderStream);
+  mediaRecorder = null;
+  mediaRecorderStream = null;
+  mediaRecorderChunks = [];
+  mediaRecorderMimeType = "";
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = String(reader.result || "");
+      const commaIndex = result.indexOf(",");
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.onerror = () => {
+      reject(new Error("couldn't read recorded audio"));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function transcribeAudioBlob(blob) {
+  const audioBase64 = await blobToBase64(blob);
+  const res = await fetch("/api/transcribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      audioBase64,
+      mimeType: blob.type || mediaRecorderMimeType || "audio/webm"
+    })
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = String(data?.detail || data?.error || `http ${res.status}`);
+    throw new Error(detail);
+  }
+
+  const text = String(data?.text || "").trim().toLowerCase();
+  if (!text) {
+    throw new Error("empty transcript");
+  }
+  return text;
+}
+
+async function startRecordedVoiceCapture() {
+  if (isRecordedVoiceCaptureActive()) {
+    return true;
+  }
+  if (!hasRecordedVoiceFallback()) {
+    return false;
+  }
+
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const preferredMimeType = getPreferredRecorderMimeType();
+    const recorder = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+
+    mediaRecorder = recorder;
+    mediaRecorderStream = stream;
+    mediaRecorderChunks = [];
+    mediaRecorderMimeType = preferredMimeType || recorder.mimeType || "audio/webm";
+
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        mediaRecorderChunks.push(event.data);
+      }
+    };
+
+    recorder.onerror = () => {
+      cleanupRecordedVoiceCapture();
+      finalizeSpeechFailure("voice recording failed. tap anna again.");
+    };
+
+    recorder.onstop = async () => {
+      const chunks = mediaRecorderChunks.slice();
+      const mimeType = mediaRecorderMimeType || recorder.mimeType || "audio/webm";
+      cleanupRecordedVoiceCapture();
+      isListeningNow = false;
+      persistentListeningEnabled = false;
+      pendingResumeListening = false;
+      singleTurnVoiceMode = false;
+      updateListeningUi();
+
+      if (!chunks.length) {
+        showSpeechStatus("anna didn't hear anything. try again and speak right away.", 3200);
+        return;
+      }
+
+      showSpeechStatus("transcribing…", 12000);
+      try {
+        const transcript = await transcribeAudioBlob(new Blob(chunks, { type: mimeType }));
+        clearAudioNotice();
+        if (!transcriptList) {
+          showInlineVoiceStatus("heard you. thinking…", 2200);
+        }
+        submitRecognizedUserText(transcript);
+      } catch (error) {
+        const detail = String(error?.message || "couldn't transcribe audio").trim().toLowerCase();
+        finalizeSpeechFailure(`voice transcription failed: ${detail}`);
+      }
+    };
+
+    recorder.start();
+    speechStartConfirmed = true;
+    clearSpeechStartTimer();
+    isListeningNow = true;
+    updateListeningUi();
+    showSpeechStatus("listening… tap anna again when you're done.", 15000);
+    clearMediaRecorderStopTimer();
+    mediaRecorderStopTimer = window.setTimeout(() => {
+      stopRecordedVoiceCapture(true);
+    }, 15000);
+    return true;
+  } catch (error) {
+    stopMediaStream(stream);
+    const code = String(error?.name || error?.message || "").trim().toLowerCase();
+    finalizeSpeechFailure(getSpeechFailureMessage(code));
+    return false;
+  }
+}
+
+function stopRecordedVoiceCapture(autoStopped = false) {
+  if (!isRecordedVoiceCaptureActive()) {
+    return false;
+  }
+  clearMediaRecorderStopTimer();
+  showSpeechStatus(autoStopped ? "got it. transcribing…" : "transcribing…", 12000);
+  try {
+    mediaRecorder.stop();
+    return true;
+  } catch {
+    cleanupRecordedVoiceCapture();
+    finalizeSpeechFailure("voice recording failed to stop cleanly. tap anna again.");
+    return false;
+  }
 }
 
 async function retrySpeechStartAfterMicProbe() {
@@ -331,12 +517,11 @@ async function retrySpeechStartAfterMicProbe() {
     return;
   }
 
-  window.setTimeout(() => {
-    if (!persistentListeningEnabled || pendingResumeListening) {
-      return;
-    }
-    setListening(true);
-  }, 140);
+  if (await startRecordedVoiceCapture()) {
+    return;
+  }
+
+  finalizeSpeechFailure("voice input didn't start. tap anna again.");
 }
 
 function clearPendingSpeechCommit() {
@@ -3802,6 +3987,11 @@ function ensureSpeechRecognizer() {
       showSpeechStatus(getSpeechFailureMessage(code), 2400);
       return;
     }
+    if (!speechStartRecoveryUsed && (!speechStartConfirmed || code === "not-allowed" || code === "service-not-allowed" || code === "audio-capture" || code === "network")) {
+      speechStartRecoveryUsed = true;
+      void retrySpeechStartAfterMicProbe();
+      return;
+    }
     finalizeSpeechFailure(getSpeechFailureMessage(code));
   };
 
@@ -3866,6 +4056,10 @@ function setListening(isListening) {
     ensureStartedUi();
     scrollTranscriptIfNeeded();
 
+    if (isRecordedVoiceCaptureActive()) {
+      return;
+    }
+
     resetSpeechRecognizer();
     speechRecognizer = ensureSpeechRecognizer();
 
@@ -3898,8 +4092,12 @@ function setListening(isListening) {
       return;
     }
 
+    if (hasRecordedVoiceFallback()) {
+      void startRecordedVoiceCapture();
+      return;
+    }
+
     // fallback: typed line via prompt (still real input)
-    // fallback if speech recognition isn't available
     closeAllModals();
     if (textInputField) {
       textInputField.value = "";
@@ -3919,6 +4117,9 @@ function setListening(isListening) {
 
   interimText = "";
   setInterim("");
+  if (stopRecordedVoiceCapture()) {
+    return;
+  }
   stopSpeechRecognizer();
   if (!transcriptList) {
     scheduleInlineVoiceTrayHide();
