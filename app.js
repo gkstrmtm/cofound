@@ -2799,8 +2799,7 @@ function setVoiceRepliesEnabled(_enabled) {
 
 async function requestMicrophoneAccessFromGesture() {
   if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-    showSpeechStatus("this browser can't request microphone access here.", 4200);
-    return false;
+    return { ok: false, hardBlocked: false, reason: "unsupported" };
   }
 
   try {
@@ -2819,26 +2818,26 @@ async function requestMicrophoneAccessFromGesture() {
       }
     });
     clearAudioNotice();
-    return true;
+    return { ok: true, hardBlocked: false, reason: "granted" };
   } catch (err) {
     const name = String(err?.name || err?.message || "").trim().toLowerCase();
     if (name.includes("notallowed") || name.includes("permission") || name.includes("denied")) {
       showSpeechStatus("microphone access is still blocked. allow it in the browser and try again.", 4200);
-      return false;
+      return { ok: false, hardBlocked: true, reason: "blocked" };
     }
     if (name.includes("notfound") || name.includes("devicesnotfound")) {
-      showSpeechStatus("no microphone was found for this browser.", 4200);
-      return false;
+      showSpeechStatus("i couldn't confirm the mic from the browser prompt, but i'm trying voice anyway.", 2800);
+      return { ok: false, hardBlocked: false, reason: "notfound" };
     }
-    showSpeechStatus("i couldn't get microphone access yet. try again.", 3200);
-    return false;
+    showSpeechStatus("i couldn't confirm microphone access yet, but i'm trying voice anyway.", 2800);
+    return { ok: false, hardBlocked: false, reason: "unknown" };
   }
 }
 
 async function retryVoiceCaptureFromGesture() {
   unlockAudioFromGesture();
-  const micReady = await requestMicrophoneAccessFromGesture();
-  if (!micReady) {
+  const micAttempt = await requestMicrophoneAccessFromGesture();
+  if (micAttempt?.hardBlocked) {
     return;
   }
 
