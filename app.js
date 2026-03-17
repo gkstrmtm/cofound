@@ -3672,11 +3672,6 @@ function ensureSpeechRecognizer() {
   recognizer.continuous = true;
   recognizer.interimResults = true;
   recognizer.lang = "en-US";
-  recognizer.maxAlternatives = 1;
-
-  recognizer.onstart = () => {
-    clearAudioNotice();
-  };
 
   recognizer.onresult = (event) => {
     let nextInterim = "";
@@ -3708,51 +3703,8 @@ function ensureSpeechRecognizer() {
     }
   };
 
-  recognizer.onerror = (event) => {
-    const code = String(event?.error || "").trim().toLowerCase();
-    isListeningNow = false;
-    updateListeningUi();
-
-    if (code === "not-allowed" || code === "service-not-allowed") {
-      persistentListeningEnabled = false;
-      pendingResumeListening = false;
-      Promise.resolve(getMicrophonePermissionState())
-        .then((state) => {
-          if (state === "denied") {
-            showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
-          } else {
-            showSpeechStatus("voice couldn't start from the browser yet. tap enable voice again.", 3200);
-          }
-        })
-        .catch(() => {
-          showSpeechStatus("voice couldn't start from the browser yet. tap enable voice again.", 3200);
-        });
-      startWakeWordMonitoring();
-      return;
-    }
-
-    if (code === "audio-capture") {
-      persistentListeningEnabled = false;
-      pendingResumeListening = false;
-      showSpeechStatus("i can't access a microphone right now.", 4200);
-      startWakeWordMonitoring();
-      return;
-    }
-
-    if (code === "no-speech") {
-      showSpeechStatus("i didn't hear anything. try again.", 2400);
-      if (persistentListeningEnabled) {
-        resumePersistentListeningSoon(160);
-      }
-      return;
-    }
-
-    showSpeechStatus("voice input had a problem. tap again.", 3000);
-    if (persistentListeningEnabled) {
-      resumePersistentListeningSoon(220);
-      return;
-    }
-    startWakeWordMonitoring();
+  recognizer.onerror = () => {
+    // keep it quiet; user can tap to stop/retry
   };
 
   recognizer.onend = () => {
@@ -3812,33 +3764,7 @@ function setListening(isListening) {
       try {
         speechRecognizer.start();
       } catch {
-        resetSpeechRecognizer();
-        speechRecognizer = ensureSpeechRecognizer();
-        if (speechRecognizer) {
-          try {
-            speechRecognizer.start();
-            return;
-          } catch {
-            // fall through to user-facing failure state
-          }
-        }
-        isListeningNow = false;
-        persistentListeningEnabled = false;
-        pendingResumeListening = false;
-        singleTurnVoiceMode = false;
-        updateListeningUi();
-        Promise.resolve(getMicrophonePermissionState())
-          .then((state) => {
-            if (state === "denied") {
-              showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
-            } else {
-              showSpeechStatus("voice input couldn't start. tap enable voice again.", 3200);
-            }
-          })
-          .catch(() => {
-            showSpeechStatus("voice input couldn't start. tap enable voice again.", 3200);
-          });
-        startWakeWordMonitoring();
+        // ignore: start can throw if called twice quickly
       }
       return;
     }
