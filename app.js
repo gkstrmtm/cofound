@@ -697,11 +697,11 @@ function isMeaningfulSpeechPhrase(text, options = {}) {
     return true;
   }
 
-  if (options.allowSingleWord && words[0].length >= 4) {
+  if (options.allowSingleWord && words[0].length >= 3) {
     return true;
   }
 
-  return normalized.length >= 12;
+  return normalized.length >= 8;
 }
 
 function isLikelyCurrentAnnaSpeech(text) {
@@ -720,7 +720,7 @@ function shouldInterruptTtsPlayback(interim, finalizedParts = []) {
   }
 
   const interimText = normalizeBufferedSpeechParts([interim]);
-  if (isMeaningfulSpeechPhrase(interimText) && countMeaningfulSpeechWords(interimText) >= 2 && !isLikelyCurrentAnnaSpeech(interimText)) {
+  if (isMeaningfulSpeechPhrase(interimText, { allowSingleWord: true }) && countMeaningfulSpeechWords(interimText) >= 1 && !isLikelyCurrentAnnaSpeech(interimText)) {
     return true;
   }
 
@@ -1033,7 +1033,14 @@ function openCurrentTodoListSheet() {
 
 function updateLatestStartupListForUser(mutator, userId = getCurrentUserId()) {
   const log = readStartupLists();
-  const index = [...log].map((entry, idx) => ({ entry, idx })).filter(({ entry }) => String(entry?.userId || "") === userId).map(({ idx }) => idx).pop();
+  const userIndexes = [...log]
+    .map((entry, idx) => ({ entry, idx }))
+    .filter(({ entry }) => String(entry?.userId || "") === userId);
+  const nonEmptyIndex = userIndexes
+    .filter(({ entry }) => Array.isArray(entry?.items) && entry.items.some((item) => normalizeTaskTitle(item)))
+    .map(({ idx }) => idx)
+    .pop();
+  const index = nonEmptyIndex ?? userIndexes.map(({ idx }) => idx).pop();
   if (index == null) {
     return null;
   }
@@ -1061,6 +1068,22 @@ function updateLatestStartupListForUser(mutator, userId = getCurrentUserId()) {
   renderStartupDashboard();
   renderTaskWorkspace();
   return next[index];
+}
+
+function findMatchingTaskTitle(text, userId = getCurrentUserId()) {
+  const normalized = normalizeBufferedSpeechParts([text]);
+  if (!normalized) {
+    return "";
+  }
+
+  const titles = getTaskEntriesForUser(userId).map((entry) => normalizeTaskTitle(entry.title)).filter(Boolean);
+  const exact = titles.find((title) => title === normalized);
+  if (exact) {
+    return exact;
+  }
+
+  const containing = titles.filter((title) => normalized.includes(title) || title.includes(normalized));
+  return containing.length === 1 ? containing[0] : "";
 }
 
 function renameTaskEverywhere(fromTitle, toTitle, userId = getCurrentUserId()) {
@@ -1292,6 +1315,7 @@ function maybeHandleLocalVoiceCommand(text) {
   if (!normalized) {
     return { handled: false };
   }
+  const activeTaskTitle = getCurrentTaskTitle();
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1337,9 +1361,22 @@ function maybeHandleLocalVoiceCommand(text) {
     };
   }
 
+  const renameCurrentTaskMatch = normalized.match(/(?:rename|change|edit|update)\s+(?:this|current)\s+task\s+(?:to|into)\s+(.+)/);
+  if (renameCurrentTaskMatch && activeTaskTitle) {
+    const nextTitle = normalizeTaskTitle(renameCurrentTaskMatch[1]);
+    const changed = renameTaskEverywhere(activeTaskTitle, nextTitle);
+    if (changed) {
+      return {
+        handled: true,
+        reply: `updated this task to ${nextTitle}.`
+      };
+    }
+  }
+
   const renameListMatch = normalized.match(/(?:rename|change|replace|edit)\s+(?:the\s+)?(?:task|item|todo|to do|step)?\s*(.+?)\s+(?:to|with)\s+(.+)/);
-  if (renameListMatch && mentionsTodoList(normalized)) {
-    const changed = renameTaskEverywhere(renameListMatch[1], renameListMatch[2]);
+  if (renameListMatch && (mentionsTodoList(normalized) || /\btask\b/.test(normalized))) {
+    const sourceTitle = findMatchingTaskTitle(renameListMatch[1]) || normalizeTaskTitle(renameListMatch[1]);
+    const changed = renameTaskEverywhere(sourceTitle, renameListMatch[2]);
     if (changed) {
       openCurrentTodoListSheet();
       return {
@@ -1401,8 +1438,8 @@ function maybeHandleLocalVoiceCommand(text) {
   }
 
   const noteMatch = normalized.match(/(?:set|update|change|add)\s+(?:the\s+)?(?:working\s+)?notes?(?:\s+for\s+(?:this\s+task|the\s+task))?(?:\s+to|\s+with|\s+that\s+say)?\s+(.+)/);
-  if (noteMatch && getCurrentTaskTitle()) {
-    setTaskNotes(getCurrentTaskTitle(), noteMatch[1]);
+  if (noteMatch && activeTaskTitle) {
+    setTaskNotes(activeTaskTitle, noteMatch[1]);
     renderTaskWorkspace();
     renderStartupDashboard();
     return {
@@ -1412,8 +1449,8 @@ function maybeHandleLocalVoiceCommand(text) {
   }
 
   const addSubtaskMatch = normalized.match(/(?:add|create)\s+(?:a\s+)?(?:subtask|step)(?:\s+called)?\s+(.+)/);
-  if (addSubtaskMatch && getCurrentTaskTitle()) {
-    addTaskSubtask(getCurrentTaskTitle(), addSubtaskMatch[1]);
+  if (addSubtaskMatch && activeTaskTitle) {
+    addTaskSubtask(activeTaskTitle, addSubtaskMatch[1]);
     renderTaskWorkspace();
     renderStartupDashboard();
     return {
@@ -1423,7 +1460,7 @@ function maybeHandleLocalVoiceCommand(text) {
   }
 
   const renameSubtaskMatch = normalized.match(/(?:rename|change|replace)\s+(?:the\s+)?(?:subtask|step)\s+(.+?)\s+(?:to|with)\s+(.+)/);
-  if (renameSubtaskMatch && getCurrentTaskTitle()) {
+  if (renameSubtaskMatch && activeTaskTitle) {
     const changed = renameCurrentTaskSubtask(renameSubtaskMatch[1], renameSubtaskMatch[2]);
     if (changed) {
       return {
@@ -1433,13 +1470,53 @@ function maybeHandleLocalVoiceCommand(text) {
     }
   }
 
+  const renameCurrentStepMatch = normalized.match(/(?:rename|change|edit|update)\s+(?:this|current)\s+(?:step|subtask)\s+(?:to|into)\s+(.+)/);
+  if (renameCurrentStepMatch && activeTaskTitle) {
+    const activeEntry = readTaskEntry(activeTaskTitle);
+    const openSubtask = activeEntry.subtasks.find((item) => !item.completed) || activeEntry.subtasks[0];
+    if (openSubtask) {
+      const changed = renameCurrentTaskSubtask(openSubtask.title, renameCurrentStepMatch[1], activeTaskTitle);
+      if (changed) {
+        return {
+          handled: true,
+          reply: `updated that step to ${normalizeTaskTitle(renameCurrentStepMatch[1])}.`
+        };
+      }
+    }
+  }
+
   const doneStepMatch = normalized.match(/(?:mark|set).*(?:subtask|step)\s+(.+?)\s+(?:done|complete|completed|finished)/);
-  if (doneStepMatch && getCurrentTaskTitle()) {
+  if (doneStepMatch && activeTaskTitle) {
     const changed = markCurrentTaskSubtaskDone(doneStepMatch[1]);
     if (changed) {
       return {
         handled: true,
         reply: `marked ${normalizeTaskTitle(doneStepMatch[1])} done.`
+      };
+    }
+  }
+
+  const genericDoneMatch = normalized.match(/(?:mark|set|make)\s+(.+?)\s+(?:as\s+)?(?:done|complete|completed|finished)/);
+  if (genericDoneMatch) {
+    const subtaskChanged = activeTaskTitle ? markCurrentTaskSubtaskDone(genericDoneMatch[1], activeTaskTitle) : false;
+    if (subtaskChanged) {
+      return {
+        handled: true,
+        reply: `marked ${normalizeTaskTitle(genericDoneMatch[1])} done.`
+      };
+    }
+
+    const taskTitle = findMatchingTaskTitle(genericDoneMatch[1]);
+    if (taskTitle) {
+      const entry = readTaskEntry(taskTitle);
+      if (!entry.completed) {
+        updateTaskEntry(taskTitle, (current) => ({ ...current, completed: true }));
+        renderTaskWorkspace();
+        renderStartupDashboard();
+      }
+      return {
+        handled: true,
+        reply: `${taskTitle} is marked done.`
       };
     }
   }
