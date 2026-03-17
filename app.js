@@ -243,6 +243,19 @@ function showInlineVoiceStatus(message, delay = 2600) {
   scheduleInlineVoiceTrayHide(delay);
 }
 
+function showSpeechStatus(message, delay = 2600) {
+  const text = String(message || "").trim().toLowerCase();
+  if (!text) {
+    clearAudioNotice();
+    return;
+  }
+  if (transcriptList) {
+    setAudioNotice(text);
+    return;
+  }
+  showInlineVoiceStatus(text, delay);
+}
+
 function clearPendingSpeechCommit() {
   if (pendingSpeechCommitTimer) {
     window.clearTimeout(pendingSpeechCommitTimer);
@@ -547,10 +560,10 @@ function isBulkTaskDoneIntent(text) {
 
 function mentionsTodoList(text) {
   const normalized = normalizeBufferedSpeechParts([text]);
-  if (/\b(todo|to do|checklist|task list|task board|list)\b/.test(normalized)) {
+  if (/\b(?:to\s*do|todo|to-do|checklist|task list|task board|to do list|todo list|to-do list)\b/.test(normalized)) {
     return true;
   }
-  return Boolean(getLatestStartupItems().length) && /\b(current|existing|old)\s+(?:one|list)\b/.test(normalized);
+  return Boolean(getLatestStartupItems().length) && /\b(current|existing|old)\s+(?:to\s*do|todo|to-do|checklist|task list|task board|one)\b/.test(normalized);
 }
 
 function wantsNewTodoList(text) {
@@ -603,15 +616,24 @@ function setPendingTodoListGeneration(enabled, options = {}) {
 
 function maybePrepareTaskBoardForUserRequest(text) {
   const normalized = normalizeBufferedSpeechParts([text]);
-  if (!normalized || !wantsClearTodoList(normalized)) {
+  if (!normalized) {
     return { continueToModel: true };
+  }
+
+  const explicitTodoRequest = wantsNewTodoList(normalized);
+  if (!wantsClearTodoList(normalized)) {
+    return {
+      continueToModel: true,
+      todoListRequest: explicitTodoRequest,
+      redirectToStartup: explicitTodoRequest && getCurrentPageLabel() === "task"
+    };
   }
 
   const clearedCount = clearCurrentStartupList({
     markCompleted: /\b(done|finished|completed)\b/.test(normalized) || !/\bkeep\b/.test(normalized)
   });
 
-  if (wantsNewTodoList(normalized)) {
+  if (explicitTodoRequest) {
     return {
       continueToModel: true,
       clearedCount,
@@ -1960,6 +1982,7 @@ function buildMessagesForApi() {
   sysParts.push("when the user references time (yesterday, last week, tomorrow), use the timestamps above to reason about it.");
   sysParts.push("if the user asks what is on the to-do list, what they were working on, or what happened earlier, answer directly from the saved task board, notes, and chat history above. do not ask them to repeat information that is already present.");
   sysParts.push("if the user asks you to make, replace, refresh, or create a to-do list or checklist, answer with a real bullet or numbered list of tasks so the app can save it as the active checklist. do not just describe a list in prose.");
+  sysParts.push("if the user asks you to ask questions, probe, brainstorm, explain, or reason something through, do not turn that into a to-do list unless they explicitly ask for a to-do list or checklist.");
   if (pendingTodoListGenerationRequest) {
     sysParts.push("the user is actively asking for a fresh startup to-do list right now. your reply must be only a concise bullet or numbered list with 4 to 8 actionable tasks. no intro sentence, no outro, no explanation.");
   }
@@ -2157,7 +2180,7 @@ function renderSheetList(extracted) {
 }
 
 function maybeShowListSheetFromAnna(text) {
-  if (!listSheetBody || !listSheetTitle) {
+  if (!pendingTodoListGenerationRequest) {
     return false;
   }
   const extracted = extractTodoListFromAnnaText(text);
@@ -2165,9 +2188,11 @@ function maybeShowListSheetFromAnna(text) {
     return false;
   }
 
-  listSheetTitle.textContent = extracted.title;
-  renderSheetList(extracted);
-  setListSheetOpen(true);
+  if (listSheetBody && listSheetTitle) {
+    listSheetTitle.textContent = extracted.title;
+    renderSheetList(extracted);
+    setListSheetOpen(true);
+  }
 
   persistStartupList(extracted);
   return true;
@@ -3229,6 +3254,7 @@ function sanitizeAnnaDisplayText(text) {
     .replace(/[^\S\r\n]{2,}/g, " ")
     .replace(/\n[ \t]+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
+    .toLowerCase()
     .trim();
 }
 
@@ -3578,6 +3604,11 @@ function ensureSpeechRecognizer() {
   recognizer.continuous = true;
   recognizer.interimResults = true;
   recognizer.lang = "en-US";
+  recognizer.maxAlternatives = 1;
+
+  recognizer.onstart = () => {
+    clearAudioNotice();
+  };
 
   recognizer.onresult = (event) => {
     let nextInterim = "";
@@ -3609,8 +3640,41 @@ function ensureSpeechRecognizer() {
     }
   };
 
-  recognizer.onerror = () => {
-    // keep it quiet; user can tap to stop/retry
+  recognizer.onerror = (event) => {
+    const code = String(event?.error || "").trim().toLowerCase();
+    isListeningNow = false;
+    updateListeningUi();
+
+    if (code === "not-allowed" || code === "service-not-allowed") {
+      persistentListeningEnabled = false;
+      pendingResumeListening = false;
+      showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
+      startWakeWordMonitoring();
+      return;
+    }
+
+    if (code === "audio-capture") {
+      persistentListeningEnabled = false;
+      pendingResumeListening = false;
+      showSpeechStatus("i can't access a microphone right now.", 4200);
+      startWakeWordMonitoring();
+      return;
+    }
+
+    if (code === "no-speech") {
+      showSpeechStatus("i didn't hear anything. try again.", 2400);
+      if (persistentListeningEnabled) {
+        resumePersistentListeningSoon(160);
+      }
+      return;
+    }
+
+    showSpeechStatus("voice input had a problem. tap again.", 3000);
+    if (persistentListeningEnabled) {
+      resumePersistentListeningSoon(220);
+      return;
+    }
+    startWakeWordMonitoring();
   };
 
   recognizer.onend = () => {
@@ -3670,7 +3734,13 @@ function setListening(isListening) {
       try {
         speechRecognizer.start();
       } catch {
-        // ignore: start can throw if called twice quickly
+        isListeningNow = false;
+        persistentListeningEnabled = false;
+        pendingResumeListening = false;
+        singleTurnVoiceMode = false;
+        updateListeningUi();
+        showSpeechStatus("voice input couldn't start. tap again.", 3200);
+        startWakeWordMonitoring();
       }
       return;
     }
