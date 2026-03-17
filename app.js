@@ -2822,47 +2822,16 @@ function retryVoiceCaptureFromGesture() {
   unlockAudioFromGesture();
   clearAudioNotice();
 
-  const startVoiceCaptureNow = () => {
-    if (shouldUseInlineVoiceMode()) {
-      startInlineVoiceCapture("tap");
-    } else {
-      persistentListeningEnabled = true;
-      pendingResumeListening = false;
-      singleTurnVoiceMode = false;
-      playRecordBeep(true);
-      setListening(true);
-    }
-  };
-
-  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-    startVoiceCaptureNow();
+  if (shouldUseInlineVoiceMode()) {
+    startInlineVoiceCapture("tap");
     return;
   }
 
-  navigator.mediaDevices
-    .getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    })
-    .then((stream) => {
-      try {
-        stream.getTracks().forEach((track) => track.stop());
-      } catch {
-        // ignore
-      }
-      startVoiceCaptureNow();
-    })
-    .catch((err) => {
-      const name = String(err?.name || err?.message || "").trim().toLowerCase();
-      if (name.includes("notallowed") || name.includes("permission") || name.includes("denied")) {
-        showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
-        return;
-      }
-      startVoiceCaptureNow();
-    });
+  persistentListeningEnabled = true;
+  pendingResumeListening = false;
+  singleTurnVoiceMode = false;
+  playRecordBeep(true);
+  setListening(true);
 }
 
 function resetSpeechRecognizer() {
