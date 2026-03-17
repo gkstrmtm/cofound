@@ -448,8 +448,12 @@ function clearWakeWordRestart() {
   }
 }
 
-function shouldUseWakeWordMode() {
+function shouldUseInlineVoiceMode() {
   return Boolean(inlineVoiceButton && inlineVoiceList && !recordButton);
+}
+
+function shouldUseWakeWordMode() {
+  return false;
 }
 
 function markVoiceActivationUnlocked() {
@@ -496,7 +500,7 @@ function scheduleWakeWordRestart(delay = 450) {
 }
 
 function startInlineVoiceCapture(source = "tap") {
-  if (!shouldUseWakeWordMode()) {
+  if (!shouldUseInlineVoiceMode()) {
     return;
   }
   if (source === "tap") {
@@ -2826,7 +2830,7 @@ function retryVoiceCaptureFromGesture() {
   unlockAudioFromGesture();
   clearAudioNotice();
 
-  if (shouldUseWakeWordMode()) {
+  if (shouldUseInlineVoiceMode()) {
     startInlineVoiceCapture("tap");
   } else {
     persistentListeningEnabled = true;
