@@ -238,7 +238,52 @@ function scheduleInlineVoiceTrayHide(delay = 7200) {
   }, delay);
 }
 
-function showInlineVoiceStatus(message, delay = 2600) {
+function normalizeVoiceUiState(state) {
+  const normalized = String(state || "info").trim().toLowerCase();
+  if (["listening", "thinking", "replying", "issue", "info"].includes(normalized)) {
+    return normalized;
+  }
+  return "info";
+}
+
+function getVoiceUiStateLabel(state) {
+  const normalized = normalizeVoiceUiState(state);
+  if (normalized === "listening") {
+    return "listening";
+  }
+  if (normalized === "thinking") {
+    return "thinking";
+  }
+  if (normalized === "replying") {
+    return "anna";
+  }
+  if (normalized === "issue") {
+    return "voice issue";
+  }
+  return "voice";
+}
+
+function renderVoiceStatusContent(host, message, state = "info") {
+  if (!host) {
+    return;
+  }
+  const normalizedState = normalizeVoiceUiState(state);
+  host.textContent = "";
+  host.dataset.voiceState = normalizedState;
+
+  const badge = document.createElement("span");
+  badge.className = `voice-state-badge voice-state-${normalizedState}`;
+  badge.textContent = getVoiceUiStateLabel(normalizedState);
+
+  const text = document.createElement("span");
+  text.className = "voice-state-text";
+  text.textContent = String(message || "").trim();
+
+  host.appendChild(badge);
+  host.appendChild(text);
+}
+
+function showInlineVoiceStatus(message, delay = 2600, options = {}) {
   if (!inlineVoiceList) {
     return;
   }
@@ -246,23 +291,23 @@ function showInlineVoiceStatus(message, delay = 2600) {
   inlineVoiceList.innerHTML = "";
   const paragraph = document.createElement("p");
   paragraph.className = "transcript-line inline-voice-status ai";
-  paragraph.textContent = `“${String(message || "").trim()}”`;
+  renderVoiceStatusContent(paragraph, message, options.state);
   inlineVoiceList.appendChild(paragraph);
   setInlineVoiceTrayOpen(true);
   scheduleInlineVoiceTrayHide(delay);
 }
 
-function showSpeechStatus(message, delay = 2600) {
+function showSpeechStatus(message, delay = 2600, options = {}) {
   const text = String(message || "").trim().toLowerCase();
   if (!text) {
     clearAudioNotice();
     return;
   }
   if (transcriptList) {
-    setAudioNotice(text);
+    setAudioNotice(text, options);
     return;
   }
-  showInlineVoiceStatus(text, delay);
+  showInlineVoiceStatus(text, delay, options);
 }
 
 function clearSpeechStartTimer() {
@@ -299,7 +344,7 @@ function finalizeSpeechFailure(message, delay = 4200) {
   pendingResumeListening = false;
   singleTurnVoiceMode = false;
   updateListeningUi();
-  showSpeechStatus(message, delay);
+  showSpeechStatus(message, delay, { state: "issue" });
   startWakeWordMonitoring();
 }
 
@@ -443,20 +488,20 @@ async function startRecordedVoiceCapture() {
 
       if (!chunks.length) {
         if (keepSessionAlive) {
-          showSpeechStatus("anna didn't hear anything. still listening.", 2200);
+          showSpeechStatus("anna didn't hear anything. still listening.", 2200, { state: "listening" });
           resumePersistentListeningSoon(220);
         } else {
-          showSpeechStatus("anna didn't hear anything. try again and speak right away.", 3200);
+          showSpeechStatus("anna didn't hear anything. try again and speak right away.", 3200, { state: "issue" });
         }
         return;
       }
 
-      showSpeechStatus("transcribing…", 12000);
+      showSpeechStatus("thinking through that…", 12000, { state: "thinking" });
       try {
         const transcript = await transcribeAudioBlob(new Blob(chunks, { type: mimeType }));
         clearAudioNotice();
         if (!transcriptList) {
-          showInlineVoiceStatus("heard you. thinking…", 2200);
+          showInlineVoiceStatus("heard you. thinking…", 2200, { state: "thinking" });
         }
         submitRecognizedUserText(transcript);
       } catch (error) {
@@ -470,7 +515,7 @@ async function startRecordedVoiceCapture() {
     clearSpeechStartTimer();
     isListeningNow = true;
     updateListeningUi();
-    showSpeechStatus("listening… tap anna again when you're done.", 15000);
+    showSpeechStatus("listening. tap anna again when you're done.", 15000, { state: "listening" });
     clearMediaRecorderStopTimer();
     mediaRecorderStopTimer = window.setTimeout(() => {
       stopRecordedVoiceCapture(true);
@@ -489,7 +534,7 @@ function stopRecordedVoiceCapture(autoStopped = false) {
     return false;
   }
   clearMediaRecorderStopTimer();
-  showSpeechStatus(autoStopped ? "got it. transcribing…" : "transcribing…", 12000);
+  showSpeechStatus(autoStopped ? "got it. thinking through that…" : "thinking through that…", 12000, { state: "thinking" });
   try {
     mediaRecorder.stop();
     return true;
@@ -662,6 +707,7 @@ function submitRecognizedUserText(text) {
 
   conversation = [...conversation, { role: "user", content: normalized }].slice(-16);
   const pendingId = pushPendingAnna();
+  showSpeechStatus("thinking through that…", 12000, { state: "thinking" });
 
   startStreamingAnnaReply(pendingId)
     .then((reply) => {
@@ -2970,10 +3016,10 @@ async function routeTtsAudioToSystemOutput(audio) {
   }
 }
 
-function setAudioNotice(message) {
+function setAudioNotice(message, options = {}) {
   const text = String(message || "").trim();
   if (audioNotice && audioNoticeText) {
-    audioNoticeText.textContent = text;
+    renderVoiceStatusContent(audioNoticeText, text, options.state);
     audioNotice.classList.toggle("hidden", !text);
     audioNotice.setAttribute("aria-hidden", String(!text));
   }
@@ -3743,9 +3789,15 @@ async function startStreamingAnnaReply(pendingId) {
 
   annaReplyInFlight = true;
   try {
+    let replyStateShown = false;
     const final = await fetchAnnaReplyStream((delta) => {
       displayFull += delta;
       setPendingAnnaText(pendingId, sanitizeAnnaDisplayText(displayFull) || "…");
+
+      if (!replyStateShown) {
+        replyStateShown = true;
+        showSpeechStatus("anna's replying…", 12000, { state: "replying" });
+      }
 
       if (!isVoiceOutputEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
         return;
@@ -3951,9 +4003,7 @@ function ensureSpeechRecognizer() {
   recognizer.onstart = () => {
     speechStartConfirmed = true;
     clearSpeechStartTimer();
-    if (!transcriptList) {
-      showInlineVoiceStatus("listening…", 1800);
-    }
+    showSpeechStatus("listening now.", 1800, { state: "listening" });
   };
 
   recognizer.onresult = (event) => {
@@ -4919,6 +4969,7 @@ function sendTypedToAnna(rawText) {
   appendToMemory("user", lower);
   conversation = [...conversation, { role: "user", content: lower }].slice(-16);
   const pendingId = pushPendingAnna();
+  showSpeechStatus("thinking through that…", 12000, { state: "thinking" });
 
   startStreamingAnnaReply(pendingId)
     .then((reply) => {

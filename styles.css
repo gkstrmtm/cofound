@@ -182,8 +182,60 @@ button {
   color: #e9f5d1;
 }
 
+.inline-voice-list .inline-voice-status {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  text-align: left;
+}
+
 .inline-voice-list .transcript-line.interim {
   opacity: 0.78;
+}
+
+.voice-state-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 5.2rem;
+  padding: 0.32rem 0.58rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.voice-state-text {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.voice-state-listening {
+  color: #153000;
+  background: linear-gradient(180deg, rgba(203, 255, 146, 0.96), rgba(165, 221, 102, 0.96));
+}
+
+.voice-state-thinking {
+  color: #463300;
+  background: linear-gradient(180deg, rgba(255, 233, 141, 0.96), rgba(255, 203, 94, 0.96));
+}
+
+.voice-state-replying {
+  color: #4a2400;
+  background: linear-gradient(180deg, rgba(255, 197, 150, 0.98), rgba(255, 154, 83, 0.98));
+}
+
+.voice-state-issue {
+  color: #4b1805;
+  background: linear-gradient(180deg, rgba(255, 210, 192, 0.98), rgba(255, 171, 137, 0.98));
+}
+
+.voice-state-info {
+  color: #213c00;
+  background: linear-gradient(180deg, rgba(239, 245, 217, 0.98), rgba(216, 229, 175, 0.98));
 }
 
 .inline-voice-close {
@@ -1151,7 +1203,12 @@ button {
   color: var(--olive-deep);
   font-weight: 700;
   line-height: 1.45;
-  text-align: center;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
 }
 
 .transcript-pane {
