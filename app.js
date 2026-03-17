@@ -2834,23 +2834,42 @@ async function requestMicrophoneAccessFromGesture() {
   }
 }
 
+async function getMicrophonePermissionState() {
+  if (!navigator.permissions || typeof navigator.permissions.query !== "function") {
+    return "";
+  }
+  try {
+    const status = await navigator.permissions.query({ name: "microphone" });
+    return String(status?.state || "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 async function retryVoiceCaptureFromGesture() {
   unlockAudioFromGesture();
-  const micAttempt = await requestMicrophoneAccessFromGesture();
-  if (micAttempt?.hardBlocked) {
-    return;
-  }
+
+  const micAttemptPromise = requestMicrophoneAccessFromGesture();
 
   if (shouldUseWakeWordMode()) {
     startInlineVoiceCapture("tap");
-    return;
+  } else {
+    persistentListeningEnabled = true;
+    pendingResumeListening = false;
+    singleTurnVoiceMode = false;
+    playRecordBeep(true);
+    setListening(true);
   }
 
-  persistentListeningEnabled = true;
-  pendingResumeListening = false;
-  singleTurnVoiceMode = false;
-  playRecordBeep(true);
-  setListening(true);
+  const micAttempt = await micAttemptPromise;
+  if (micAttempt?.hardBlocked) {
+    if (isListeningNow || persistentListeningEnabled) {
+      pendingResumeListening = false;
+      persistentListeningEnabled = false;
+      singleTurnVoiceMode = false;
+      setListening(false);
+    }
+  }
 }
 
 function getSelectedVoiceId() {
@@ -3704,7 +3723,17 @@ function ensureSpeechRecognizer() {
     if (code === "not-allowed" || code === "service-not-allowed") {
       persistentListeningEnabled = false;
       pendingResumeListening = false;
-      showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
+      Promise.resolve(getMicrophonePermissionState())
+        .then((state) => {
+          if (state === "denied") {
+            showSpeechStatus("microphone access is blocked. allow the mic and try again.", 4200);
+          } else {
+            showSpeechStatus("voice couldn't start from the browser yet. tap enable voice again.", 3200);
+          }
+        })
+        .catch(() => {
+          showSpeechStatus("voice couldn't start from the browser yet. tap enable voice again.", 3200);
+        });
       startWakeWordMonitoring();
       return;
     }
