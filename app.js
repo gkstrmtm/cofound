@@ -167,6 +167,9 @@ let wakeWordRestartTimer = null;
 let wakeWordDetectedAt = 0;
 let wakeWordRecentTranscript = "";
 let inlineVoiceHideTimer = null;
+let speechStartTimer = null;
+let speechStartConfirmed = false;
+let speechStartRecoveryUsed = false;
 let pendingTodoListGenerationRequest = false;
 let pendingTodoListRedirectToStartup = false;
 let supabaseClient = null;
@@ -255,6 +258,85 @@ function showSpeechStatus(message, delay = 2600) {
     return;
   }
   showInlineVoiceStatus(text, delay);
+}
+
+function clearSpeechStartTimer() {
+  if (speechStartTimer) {
+    window.clearTimeout(speechStartTimer);
+    speechStartTimer = null;
+  }
+}
+
+function stopMediaStream(stream) {
+  if (!stream || typeof stream.getTracks !== "function") {
+    return;
+  }
+  try {
+    stream.getTracks().forEach((track) => track.stop());
+  } catch {
+    // ignore
+  }
+}
+
+function finalizeSpeechFailure(message, delay = 4200) {
+  clearSpeechStartTimer();
+  speechStartConfirmed = false;
+  isListeningNow = false;
+  persistentListeningEnabled = false;
+  pendingResumeListening = false;
+  singleTurnVoiceMode = false;
+  updateListeningUi();
+  showSpeechStatus(message, delay);
+  startWakeWordMonitoring();
+}
+
+function getSpeechFailureMessage(errorCode, permissionState = "") {
+  const code = String(errorCode || "").trim().toLowerCase();
+  if (code === "not-allowed" || code === "service-not-allowed" || permissionState === "denied") {
+    return "microphone access is blocked in your browser settings. allow mic access for this site, then tap anna again.";
+  }
+  if (code === "audio-capture") {
+    return "anna couldn't find a working microphone. reconnect your mic and tap anna again.";
+  }
+  if (code === "network") {
+    return "speech recognition hit a browser network error. tap anna again.";
+  }
+  if (code === "no-speech") {
+    return "anna didn't hear anything. try again and speak right away.";
+  }
+  return "voice input didn't start. tap anna again.";
+}
+
+async function retrySpeechStartAfterMicProbe() {
+  const permissionState = await getMicrophonePermissionState();
+  if (permissionState === "denied") {
+    finalizeSpeechFailure(getSpeechFailureMessage("not-allowed", permissionState));
+    return;
+  }
+
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function") {
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      const code = String(error?.name || error?.message || "").trim().toLowerCase();
+      finalizeSpeechFailure(getSpeechFailureMessage(code, permissionState));
+      return;
+    } finally {
+      stopMediaStream(stream);
+    }
+  }
+
+  if (!persistentListeningEnabled || pendingResumeListening) {
+    return;
+  }
+
+  window.setTimeout(() => {
+    if (!persistentListeningEnabled || pendingResumeListening) {
+      return;
+    }
+    setListening(true);
+  }, 140);
 }
 
 function clearPendingSpeechCommit() {
@@ -522,6 +604,7 @@ function startInlineVoiceCapture(source = "tap") {
   stopWakeWordListeningSession();
   clearInlineVoiceHideTimer();
   setInlineVoiceTrayOpen(true);
+  speechStartRecoveryUsed = false;
   singleTurnVoiceMode = false;
   persistentListeningEnabled = true;
   pendingResumeListening = false;
@@ -2821,6 +2904,7 @@ function retryVoiceCaptureFromGesture() {
   markVoiceActivationUnlocked();
   unlockAudioFromGesture();
   clearAudioNotice();
+  speechStartRecoveryUsed = false;
 
   if (shouldUseInlineVoiceMode()) {
     startInlineVoiceCapture("tap");
@@ -2835,6 +2919,8 @@ function retryVoiceCaptureFromGesture() {
 }
 
 function resetSpeechRecognizer() {
+  clearSpeechStartTimer();
+  speechStartConfirmed = false;
   if (!speechRecognizer) {
     return;
   }
@@ -3666,7 +3752,17 @@ function ensureSpeechRecognizer() {
   recognizer.interimResults = true;
   recognizer.lang = "en-US";
 
+  recognizer.onstart = () => {
+    speechStartConfirmed = true;
+    clearSpeechStartTimer();
+    if (!transcriptList) {
+      showInlineVoiceStatus("listening…", 1800);
+    }
+  };
+
   recognizer.onresult = (event) => {
+    speechStartConfirmed = true;
+    clearSpeechStartTimer();
     let nextInterim = "";
     const finalizedParts = [];
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -3696,17 +3792,38 @@ function ensureSpeechRecognizer() {
     }
   };
 
-  recognizer.onerror = () => {
-    // keep it quiet; user can tap to stop/retry
+  recognizer.onerror = (event) => {
+    clearSpeechStartTimer();
+    const code = String(event?.error || "").trim().toLowerCase();
+    if (!code || code === "aborted") {
+      return;
+    }
+    if (code === "no-speech") {
+      showSpeechStatus(getSpeechFailureMessage(code), 2400);
+      return;
+    }
+    finalizeSpeechFailure(getSpeechFailureMessage(code));
   };
 
   recognizer.onend = () => {
+    const endedBeforeStart = !speechStartConfirmed;
+    clearSpeechStartTimer();
+    speechStartConfirmed = false;
     isListeningNow = false;
     if (persistentListeningEnabled) {
       updateListeningUi();
       if (pendingResumeListening) {
         maybeResumeListeningAfterReply();
       } else {
+        if (endedBeforeStart) {
+          if (!speechStartRecoveryUsed) {
+            speechStartRecoveryUsed = true;
+            retrySpeechStartAfterMicProbe();
+            return;
+          }
+          finalizeSpeechFailure("voice input ended before it started. tap anna again.");
+          return;
+        }
         if (finalSpeechBuffer.trim() && !pendingSpeechCommitTimer) {
           scheduleBufferedSpeechCommit();
         }
@@ -3753,10 +3870,30 @@ function setListening(isListening) {
     speechRecognizer = ensureSpeechRecognizer();
 
     if (speechRecognizer) {
+      speechStartConfirmed = false;
+      clearSpeechStartTimer();
+      speechStartTimer = window.setTimeout(() => {
+        if (!persistentListeningEnabled || pendingResumeListening || speechStartConfirmed) {
+          return;
+        }
+        if (!speechStartRecoveryUsed) {
+          speechStartRecoveryUsed = true;
+          retrySpeechStartAfterMicProbe();
+          return;
+        }
+        finalizeSpeechFailure("voice input didn't start. tap anna again.");
+      }, 1800);
       try {
         speechRecognizer.start();
-      } catch {
-        // ignore: start can throw if called twice quickly
+      } catch (error) {
+        clearSpeechStartTimer();
+        const code = String(error?.name || error?.message || "").trim().toLowerCase();
+        if (!speechStartRecoveryUsed) {
+          speechStartRecoveryUsed = true;
+          retrySpeechStartAfterMicProbe();
+          return;
+        }
+        finalizeSpeechFailure(getSpeechFailureMessage(code));
       }
       return;
     }
@@ -4038,6 +4175,7 @@ function toggleListeningFromTap(event) {
     event.preventDefault?.();
   }
   const now = Date.now();
+  speechStartRecoveryUsed = false;
   if (now - lastToggleAt < 260) {
     return;
   }
