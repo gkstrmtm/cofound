@@ -198,6 +198,7 @@ let ttsNeedsUnlock = false;
 let audioUnlockAttempted = false;
 let audioCtx = null;
 let ttsFetchChain = Promise.resolve();
+let bargeInListeningMode = false;
 
 let isAdjustingVolume = false;
 
@@ -206,6 +207,14 @@ function updateListeningUi() {
   recordButton?.classList.toggle("listening", isActive);
   inlineVoiceButton?.classList.toggle("is-listening", isActive);
   appFrame?.classList.toggle("is-listening", isActive);
+}
+
+function supportsLiveSpeechRecognition() {
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function hasActiveTtsPlayback() {
+  return Boolean(ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0);
 }
 
 function clearInlineVoiceHideTimer() {
@@ -1242,6 +1251,18 @@ function startWakeWordMonitoring() {
   }
 }
 
+function maybeStartBargeInListeningSoon(delay = 120) {
+  window.setTimeout(() => {
+    if (!persistentListeningEnabled || isListeningNow || !hasActiveTtsPlayback() || ttsNeedsUnlock) {
+      return;
+    }
+    if (!supportsLiveSpeechRecognition()) {
+      return;
+    }
+    setListening(true, { preserveTts: true, bargeIn: true });
+  }, delay);
+}
+
 function resumePersistentListeningSoon(delay = 140) {
   window.setTimeout(() => {
     if (!persistentListeningEnabled || !pendingResumeListening || isListeningNow) {
@@ -1261,7 +1282,11 @@ function maybeResumeListeningAfterReply() {
   if (annaReplyInFlight) {
     return;
   }
-  if (isVoiceOutputEnabled() && (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0 || ttsNeedsUnlock)) {
+  if (isVoiceOutputEnabled() && hasActiveTtsPlayback()) {
+    maybeStartBargeInListeningSoon(90);
+    return;
+  }
+  if (isVoiceOutputEnabled() && ttsNeedsUnlock) {
     return;
   }
   if (singleTurnVoiceMode) {
@@ -3524,6 +3549,12 @@ function playNextTts() {
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
     ttsCurrentText = "";
+    if (bargeInListeningMode) {
+      bargeInListeningMode = false;
+      if (isListeningNow) {
+        showSpeechStatus("listening", 1800, { state: "listening" });
+      }
+    }
     if (ttsCurrentUrl) {
       try {
         URL.revokeObjectURL(ttsCurrentUrl);
@@ -3540,6 +3571,7 @@ function playNextTts() {
     ttsIsPlaying = false;
     ttsCurrentAudio = null;
     ttsCurrentText = "";
+    bargeInListeningMode = false;
     setAudioNotice("anna couldn't play that voice reply. try again in a second.");
     if (ttsCurrentUrl) {
       try {
@@ -3553,7 +3585,13 @@ function playNextTts() {
     maybeResumeListeningAfterReply();
   };
 
-  audio.play().catch(() => {
+  const playPromise = audio.play();
+  if (playPromise && playPromise.then) {
+    playPromise.then(() => {
+      if (persistentListeningEnabled && !isListeningNow) {
+        maybeStartBargeInListeningSoon(90);
+      }
+    }).catch(() => {
     // Likely autoplay policy. Keep this chunk and retry after unlock.
     console.warn("anna tts play() was blocked; waiting for next user gesture to retry audio");
     setAudioNotice("voice is ready. tap anywhere once and anna will speak normally.");
@@ -3572,7 +3610,13 @@ function playNextTts() {
       ttsQueue.unshift({ url: ttsCurrentUrl, sessionId, text });
     }
     ttsCurrentUrl = null;
-  });
+    });
+    return;
+  }
+
+  if (persistentListeningEnabled && !isListeningNow) {
+    maybeStartBargeInListeningSoon(90);
+  }
 }
 
 async function enqueueElevenLabsTts(text, voiceIdOverride) {
@@ -4171,6 +4215,10 @@ function ensureSpeechRecognizer() {
   recognizer.onstart = () => {
     speechStartConfirmed = true;
     clearSpeechStartTimer();
+    if (bargeInListeningMode && hasActiveTtsPlayback()) {
+      showSpeechStatus("responding", 12000, { state: "replying" });
+      return;
+    }
     showSpeechStatus("listening", 1800, { state: "listening" });
   };
 
@@ -4195,6 +4243,20 @@ function ensureSpeechRecognizer() {
 
     const nextInterim = normalizeBufferedSpeechParts(interimParts);
 
+    const ttsActive = hasActiveTtsPlayback();
+    const interrupting = ttsActive && shouldInterruptTtsPlayback(nextInterim, finalizedParts);
+
+    if (ttsActive && !interrupting) {
+      clearBufferedSpeech();
+      return;
+    }
+
+    if (interrupting) {
+      stopAllTts();
+      clearAudioNotice();
+      bargeInListeningMode = false;
+    }
+
     if (finalizedParts.length) {
       finalSpeechBuffer = normalizeBufferedSpeechParts([finalSpeechBuffer, ...finalizedParts]);
     }
@@ -4202,9 +4264,8 @@ function ensureSpeechRecognizer() {
     interimText = nextInterim;
     setInterim(nextInterim);
 
-    if (shouldInterruptTtsPlayback(nextInterim, finalizedParts) && (ttsIsPlaying || ttsQueue.length || ttsCurrentAudio || ttsFetchInFlight > 0)) {
-      stopAllTts();
-      clearAudioNotice();
+    if (interrupting) {
+      showSpeechStatus("listening", 1800, { state: "listening" });
     }
 
     if (finalSpeechBuffer) {
@@ -4262,19 +4323,24 @@ function ensureSpeechRecognizer() {
   return recognizer;
 }
 
-function setListening(isListening) {
+function setListening(isListening, options = {}) {
   if (!recordButton && !inlineVoiceButton && !transcriptPane && !inlineVoiceList) {
     return;
   }
+
+  const preserveTts = Boolean(options.preserveTts);
+  const bargeIn = Boolean(options.bargeIn);
 
   isListeningNow = isListening;
   if (isListening) {
     pendingResumeListening = false;
     clearInlineVoiceHideTimer();
+    bargeInListeningMode = bargeIn;
   } else {
     clearBufferedSpeech();
+    bargeInListeningMode = false;
   }
-  if (isListening) {
+  if (isListening && !preserveTts) {
     try {
       stopAllTts();
     } catch {
