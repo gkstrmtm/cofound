@@ -8,7 +8,7 @@
  * Env:
  * - ELEVENLABS_API_KEY (required)
  * - ELEVENLABS_VOICE_ID (optional; if missing, first available voice is used)
- * - ELEVENLABS_MODEL (optional; default: eleven_turbo_v2_5)
+ * - ELEVENLABS_MODEL (optional; default: eleven_multilingual_v2)
  */
 
 let cachedVoiceId = null;
@@ -49,9 +49,9 @@ function buildRequestBodies(text, modelId) {
   const requestedModel = String(modelId || "").trim();
   const candidateModels = [
     requestedModel,
+    "eleven_multilingual_v2",
     "eleven_flash_v2_5",
     "eleven_turbo_v2_5",
-    "eleven_multilingual_v2",
     ""
   ].filter((value, index, list) => list.indexOf(value) === index);
 
@@ -67,9 +67,9 @@ function buildRequestBodies(text, modelId) {
       body: {
         ...base,
         voice_settings: {
-          stability: 0.42,
-          similarity_boost: 0.78,
-          style: 0.12,
+          stability: 0.5,
+          similarity_boost: 0.82,
+          style: 0.28,
           use_speaker_boost: true
         }
       }
@@ -185,7 +185,7 @@ module.exports = async (req, res) => {
     (typeof payload.voice_id === "string" ? payload.voice_id : "");
   const voiceOverride = String(requestedVoiceId || "").trim();
 
-  const modelId = (process.env.ELEVENLABS_MODEL || "eleven_turbo_v2_5").trim();
+  const modelId = (process.env.ELEVENLABS_MODEL || "eleven_multilingual_v2").trim();
 
   try {
     const primaryVoiceId = voiceOverride || (await getVoiceId(apiKey));

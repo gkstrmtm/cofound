@@ -164,6 +164,7 @@ let wakeWordListeningNow = false;
 let passiveWakeWordEnabled = false;
 let wakeWordRestartTimer = null;
 let wakeWordDetectedAt = 0;
+let wakeWordRecentTranscript = "";
 let inlineVoiceHideTimer = null;
 let pendingTodoListGenerationRequest = false;
 let pendingTodoListRedirectToStartup = false;
@@ -439,6 +440,7 @@ function shouldUseWakeWordMode() {
 
 function stopWakeWordListeningSession() {
   clearWakeWordRestart();
+  wakeWordRecentTranscript = "";
   if (!wakeWordRecognizer) {
     wakeWordListeningNow = false;
     return;
@@ -462,7 +464,7 @@ function heardWakeWord(text) {
     .replace(/[^a-z\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return /(?:^|\b)(?:hi|hey)\s+an{1,2}a\b/.test(normalized);
+  return /(?:^|\b)(?:hi|hey|yo|ok(?:ay)?)\s+an{1,2}a\b/.test(normalized) || /^(?:an{1,2}a)\b/.test(normalized);
 }
 
 function scheduleWakeWordRestart(delay = 450) {
@@ -695,24 +697,29 @@ function ensureWakeWordRecognizer() {
   recognizer.continuous = true;
   recognizer.interimResults = true;
   recognizer.lang = "en-US";
+  recognizer.maxAlternatives = 3;
 
   recognizer.onresult = (event) => {
     const heardParts = [];
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const result = event.results[i];
-      const text = String(result[0]?.transcript || "").trim().toLowerCase();
-      if (text) {
-        heardParts.push(text);
+      for (let altIndex = 0; altIndex < Math.min(result.length || 0, 3); altIndex += 1) {
+        const text = String(result[altIndex]?.transcript || "").trim().toLowerCase();
+        if (text) {
+          heardParts.push(text);
+        }
       }
     }
-    const combined = normalizeBufferedSpeechParts(heardParts);
+    const combined = normalizeBufferedSpeechParts([wakeWordRecentTranscript, ...heardParts]);
     if (!combined || !heardWakeWord(combined)) {
+      wakeWordRecentTranscript = combined.slice(-80);
       return;
     }
     const now = Date.now();
     if (now - wakeWordDetectedAt < 1600) {
       return;
     }
+    wakeWordRecentTranscript = "";
     wakeWordDetectedAt = now;
     startInlineVoiceCapture("wake");
   };
@@ -729,6 +736,7 @@ function ensureWakeWordRecognizer() {
 
   recognizer.onend = () => {
     wakeWordListeningNow = false;
+    wakeWordRecentTranscript = "";
     if (passiveWakeWordEnabled && !isListeningNow && !persistentListeningEnabled && !annaReplyInFlight) {
       scheduleWakeWordRestart(500);
     }
@@ -752,6 +760,7 @@ function startWakeWordMonitoring() {
     return;
   }
   try {
+    wakeWordRecentTranscript = "";
     wakeWordRecognizer.start();
     wakeWordListeningNow = true;
   } catch {
@@ -1683,7 +1692,7 @@ function ensureCurrentChatSession() {
 function appendChatSessionEntry(role, text) {
   const normalizedRole = role === "user" ? "user" : "ai";
   const cleaned = (
-    normalizedRole === "ai" ? sanitizeAnnaReplyText(text) : String(text || "")
+    normalizedRole === "ai" ? sanitizeAnnaDisplayText(text) : String(text || "")
   ).trim();
   if (!cleaned) {
     return;
@@ -1707,7 +1716,7 @@ function appendChatSessionEntry(role, text) {
       title: getCurrentTaskTitle() || getStartupName() || item.title || "anna",
       entries: nextEntries.map((entry) => ({
         ...entry,
-        text: entry.role === "ai" ? sanitizeAnnaReplyText(entry.text) : entry.text
+        text: entry.role === "ai" ? sanitizeAnnaDisplayText(entry.text) : entry.text
       }))
     };
   });
@@ -1833,7 +1842,7 @@ function readMemoryLog() {
 }
 
 function appendToMemory(role, content) {
-  const text = (role === "user" ? String(content || "") : sanitizeAnnaReplyText(content)).trim();
+  const text = (role === "user" ? String(content || "") : sanitizeAnnaDisplayText(content)).trim();
   if (!text) {
     return;
   }
@@ -3161,7 +3170,7 @@ function pushPendingAnna() {
 }
 
 function setPendingAnnaText(pendingId, text) {
-  const cleaned = String(text || "").trim().toLowerCase() || "…";
+  const cleaned = String(text || "").trim() || "…";
   transcriptEntries = transcriptEntries.map((entry) => {
     if (entry.pendingId !== pendingId) {
       return entry;
@@ -3184,7 +3193,7 @@ function setPendingAnnaText(pendingId, text) {
 }
 
 function resolvePendingAnna(pendingId, text) {
-  const cleaned = String(text || "").trim().toLowerCase() || "…";
+  const cleaned = String(text || "").trim() || "…";
   transcriptEntries = transcriptEntries.map((entry) => {
     if (entry.pendingId !== pendingId) {
       return entry;
@@ -3204,22 +3213,32 @@ function resolvePendingAnna(pendingId, text) {
   scrollTranscriptIfNeeded();
 }
 
-function sanitizeAnnaReplyText(text) {
+function sanitizeAnnaDisplayText(text) {
   return String(text || "")
     .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u2013\u2014]/g, ", ")
-    .replace(/(?:^|\n)\s*(?:[-*•]\s*)?\[(?: |x|X)\]\s*/g, "\n")
+    .replace(/[\u2013\u2014]/g, "—")
+    .replace(/(?:^|\n)\s*(?:[-*•]\s*)?\[(?: |x|X)\]\s*/g, "\n• ")
     .replace(/\[(?: |x|X)\]\s*/g, "")
-    .replace(/[\[\]]/g, "")
+    .replace(/[\[\]{}<>]/g, "")
     .replace(
       /(?:^|\s)(?:as an? (?:ai|text-based) (?:assistant|model)|i(?:'m| am) (?:just |all )?text(?:[- ]based|[- ]only)?(?: here)?|i (?:can't|cannot) speak(?: out loud)?|i do not have a voice here|i don't have a voice here|no voice here|you(?:'ll| will) need (?:a )?different setup for voice|voice (?:isn't|is not|isn’t) available here|i can only respond in text(?: here)?|unable to use voice here|can't do voice here)(?:[^.!?]*[.!?])?/gi,
       " "
     )
-    .replace(/(?:^|\n)\s*[-*•]\s+/g, "\n")
+    .replace(/(?:^|\n)\s*[-*•]\s+/g, "\n• ")
     .replace(/\s+,/g, ",")
     .replace(/[^\S\r\n]{2,}/g, " ")
     .replace(/\n[ \t]+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sanitizeAnnaSpeechText(text) {
+  return sanitizeAnnaDisplayText(text)
+    .replace(/(?:^|\n)\s*•\s*/g, ". ")
+    .replace(/[+*=<>|^~`]/g, " ")
+    .replace(/\s*\/\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
     .trim();
 }
 
@@ -3264,7 +3283,7 @@ async function fetchAnnaReply() {
   }
 
   const data = await response.json();
-  return sanitizeAnnaReplyText(String(data.reply || "").trim());
+  return sanitizeAnnaDisplayText(String(data.reply || "").trim());
 }
 
 async function fetchAnnaReplyStream(onDelta) {
@@ -3357,7 +3376,7 @@ async function startStreamingAnnaReply(pendingId) {
   try {
     const final = await fetchAnnaReplyStream((delta) => {
       displayFull += delta;
-      setPendingAnnaText(pendingId, sanitizeAnnaReplyText(displayFull) || "…");
+      setPendingAnnaText(pendingId, sanitizeAnnaDisplayText(displayFull) || "…");
 
       if (!isVoiceOutputEnabled() || isListeningNow || sessionAtStart !== ttsSessionId) {
         return;
@@ -3367,14 +3386,14 @@ async function startStreamingAnnaReply(pendingId) {
       const { segments, remaining } = splitIntoSpeakableSegments(speakBuffer);
       speakBuffer = remaining;
       segments.forEach((seg) => {
-        const cleanedSeg = sanitizeAnnaReplyText(seg);
+        const cleanedSeg = sanitizeAnnaSpeechText(seg);
         if (cleanedSeg) {
           enqueueElevenLabsTts(cleanedSeg);
         }
       });
     });
 
-    const cleanedFinal = sanitizeAnnaReplyText(final) || "i'm here. ask me what you want to work through.";
+    const cleanedFinal = sanitizeAnnaDisplayText(final) || "i'm here. ask me what you want to work through.";
     resolvePendingAnna(pendingId, cleanedFinal);
     const createdList = maybeShowListSheetFromAnna(final);
     maybeApplyTaskWorkspaceSuggestionsFromAnna(cleanedFinal);
@@ -3391,7 +3410,7 @@ async function startStreamingAnnaReply(pendingId) {
     }
 
     if (isVoiceOutputEnabled() && !isListeningNow && sessionAtStart === ttsSessionId) {
-      const leftover = sanitizeAnnaReplyText(String(speakBuffer || "").trim());
+      const leftover = sanitizeAnnaSpeechText(String(speakBuffer || "").trim());
       if (leftover) {
         enqueueElevenLabsTts(leftover);
       }
