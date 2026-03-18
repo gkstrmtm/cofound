@@ -19,6 +19,14 @@ const taskContextBackLink = document.getElementById("taskContextBackLink");
 const startupNameText = document.getElementById("startupNameText");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const projectsLeftEl = document.getElementById("projectsLeft");
+const startupPulseSummary = document.getElementById("startupPulseSummary");
+const startupPulseMeta = document.getElementById("startupPulseMeta");
+const startupPlansSummary = document.getElementById("startupPlansSummary");
+const startupPlansMeta = document.getElementById("startupPlansMeta");
+const startupHealthSummary = document.getElementById("startupHealthSummary");
+const startupHealthMeta = document.getElementById("startupHealthMeta");
+const startupOperatorSummary = document.getElementById("startupOperatorSummary");
+const startupOperatorMeta = document.getElementById("startupOperatorMeta");
 const startupBriefingSummary = document.getElementById("startupBriefingSummary");
 const startupBoardAlerts = document.getElementById("startupBoardAlerts");
 const startupFocusList = document.getElementById("startupFocusList");
@@ -1466,7 +1474,23 @@ function getLatestStartupActivityTs(userId = getCurrentUserId()) {
     return Math.max(maxTs, Number(entry?.updatedAt || 0) || 0);
   }, 0);
 
-  return Math.max(latestListTs, taskTs);
+  const decisionTs = readDecisionLog(userId).reduce((maxTs, entry) => {
+    return Math.max(maxTs, Number(entry?.ts || 0) || 0);
+  }, 0);
+
+  const operatorState = readOperatorState(userId);
+  const operatorTs = Math.max(
+    Number(operatorState.meetingStartedAt || 0) || 0,
+    Number(operatorState.focusStartedAt || 0) || 0,
+    Number(operatorState.focusEndsAt || 0) || 0,
+    Number(operatorState.lastFocusNudgeAt || 0) || 0,
+    Number(operatorState.lastAutoReplanAt || 0) || 0,
+    ...(Array.isArray(operatorState.ritualLog)
+      ? operatorState.ritualLog.map((item) => Number(item?.ts || 0) || 0)
+      : [0])
+  );
+
+  return Math.max(latestListTs, taskTs, decisionTs, operatorTs);
 }
 
 function isCasualGreeting(text) {
@@ -6379,7 +6403,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupWeeklyReviewSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary && !startupRoadmapSummary && !startupRiskSummary && !startupMeetingSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupPulseSummary && !startupPlansSummary && !startupHealthSummary && !startupOperatorSummary && !startupBriefingSummary && !startupWeeklyReviewSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary && !startupRoadmapSummary && !startupRiskSummary && !startupMeetingSummary) {
     return;
   }
 
@@ -6397,6 +6421,27 @@ function renderStartupDashboard() {
   const roadmap = readOperatorRoadmap();
   const riskRadar = getRiskRadarData(userId);
   const decisions = readDecisionLog(userId).slice(0, 4);
+  const operatorState = readOperatorState(userId);
+
+  const pulseMetaParts = [
+    briefing.alerts.length ? `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}` : "board is calm",
+    briefing.focus.length ? `${briefing.focus.length} focus item${briefing.focus.length === 1 ? "" : "s"}` : "no focus queue",
+    timeline.length ? `${timeline.length} recent move${timeline.length === 1 ? "" : "s"}` : "no recent changes"
+  ];
+  const plansMetaParts = [
+    todayPlan.planned.length ? `${todayPlan.planned.length} on today` : todayPlan.carryOver.length ? `${todayPlan.carryOver.length} carryover` : "today is open",
+    tomorrowPlan.planned.length ? `${tomorrowPlan.planned.length} queued next` : "tomorrow is open"
+  ];
+  const healthMetaParts = [
+    riskRadar.risky.length ? `${riskRadar.risky.length} risk flag${riskRadar.risky.length === 1 ? "" : "s"}` : "no risk spikes",
+    milestoneStatus.rollups.length ? `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}` : "no milestones",
+    weeklyReview.slips.length ? `${weeklyReview.slips.length} slip${weeklyReview.slips.length === 1 ? "" : "s"}` : weeklyReview.wins.length ? `${weeklyReview.wins.length} win${weeklyReview.wins.length === 1 ? "" : "s"}` : "waiting on more signal"
+  ];
+  const operatorMetaParts = [
+    `${roadmap.length} systems live`,
+    decisions.length ? `${decisions.length} recent decision${decisions.length === 1 ? "" : "s"}` : "no recent decisions",
+    operatorState.ritualLog.length ? `${operatorState.ritualLog.length} ritual note${operatorState.ritualLog.length === 1 ? "" : "s"}` : "no ritual notes"
+  ];
 
   if (projectsLeftEl) {
     projectsLeftEl.textContent = String(remainingCount);
@@ -6407,6 +6452,31 @@ function renderStartupDashboard() {
     lastUpdatedEl.textContent = latestActivityTs
       ? formatRelativeTime(Date.now() - Number(latestActivityTs))
       : "not yet";
+  }
+
+  if (startupPulseSummary) {
+    startupPulseSummary.textContent = briefing.summary;
+  }
+  if (startupPulseMeta) {
+    startupPulseMeta.textContent = pulseMetaParts.join(" · ");
+  }
+  if (startupPlansSummary) {
+    startupPlansSummary.textContent = todayPlan.summary;
+  }
+  if (startupPlansMeta) {
+    startupPlansMeta.textContent = plansMetaParts.join(" · ");
+  }
+  if (startupHealthSummary) {
+    startupHealthSummary.textContent = riskRadar.risky.length ? riskRadar.summary : weeklyReview.summary;
+  }
+  if (startupHealthMeta) {
+    startupHealthMeta.textContent = healthMetaParts.join(" · ");
+  }
+  if (startupOperatorSummary) {
+    startupOperatorSummary.textContent = `${getMeetingModeSummary(userId)} ${getFocusModeSummary(userId)}`.trim() || "operator stack is standing by.";
+  }
+  if (startupOperatorMeta) {
+    startupOperatorMeta.textContent = operatorMetaParts.join(" · ");
   }
 
   if (startupBriefingSummary) {
