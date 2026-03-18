@@ -1914,6 +1914,24 @@ function maybeHandleLocalVoiceCommand(text) {
     };
   }
 
+  if (/(?:build|make|create|rebuild|rebalance|auto(?:\s|-)?plan)\s+(?:my\s+)?today(?:'s)?\s+plan/.test(normalized) || /(?:plan out|slot out)\s+(?:my\s+)?day/.test(normalized)) {
+    const result = buildAutoTodayPlan();
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `${result.summary}${result.scheduled.length ? ` ${result.scheduled.slice(0, 4).join("; ")}.` : ""}`.trim()
+    };
+  }
+
+  if (/(?:clear|remove|delete|reset)\s+(?:my\s+)?(?:auto|generated)\s+today(?:'s)?\s+plan/.test(normalized) || /(?:clear|reset)\s+auto(?:\s|-)?plan/.test(normalized)) {
+    const cleared = clearAutoTodayPlan();
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: cleared ? `cleared ${cleared} auto-planned task slot${cleared === 1 ? "" : "s"}.` : "there wasn't an auto-planned slot to clear."
+    };
+  }
+
   if (/(?:what(?:'s| is) on today(?:'s)? plan|show me today(?:'s)? plan|today(?:'s)? plan)/.test(normalized)) {
     return {
       handled: true,
@@ -3042,11 +3060,13 @@ function getTodayPlanData(userId = getCurrentUserId()) {
     .sort((a, b) => (Number(a?.scheduledAt || 0) || 0) - (Number(b?.scheduledAt || 0) || 0));
 
   const milestoneNames = Array.from(new Set(planned.map((entry) => normalizeTaskMilestone(entry.milestone)).filter(Boolean))).slice(0, 3);
+  const manualCount = planned.filter((entry) => normalizeTaskScheduleSource(entry.scheduledSource) === "manual").length;
+  const autoCount = planned.filter((entry) => normalizeTaskScheduleSource(entry.scheduledSource) === "auto").length;
   const summary = !planned.length
     ? carryOver.length
       ? `${carryOver.length} carryover task${carryOver.length === 1 ? "" : "s"} need to be re-slotted today.`
       : "today plan is open — schedule a task onto it."
-    : `today plan has ${planned.length} task${planned.length === 1 ? "" : "s"}${milestoneNames.length ? ` across ${milestoneNames.join(", ")}` : ""}.`;
+    : `today plan has ${planned.length} task${planned.length === 1 ? "" : "s"}${milestoneNames.length ? ` across ${milestoneNames.join(", ")}` : ""}${manualCount || autoCount ? ` · ${manualCount} manual · ${autoCount} auto` : ""}.`;
 
   return {
     summary,
@@ -3056,10 +3076,14 @@ function getTodayPlanData(userId = getCurrentUserId()) {
       bucket: getTaskScheduleBucket(entry),
       next: getTaskNextActionText(entry),
       milestone: normalizeTaskMilestone(entry.milestone),
+      source: normalizeTaskScheduleSource(entry.scheduledSource),
+      durationMinutes: estimateTaskScheduleDuration(entry),
       meta: buildTaskExecutionParts(entry).filter((item) => !item.startsWith("next ")).slice(0, 2)
     })),
     carryOver: carryOver.slice(0, 3).map((entry) => entry.title),
-    milestones: milestoneNames
+    milestones: milestoneNames,
+    manualCount,
+    autoCount
   };
 }
 
@@ -3258,6 +3282,20 @@ function normalizeTaskMilestone(value) {
     .slice(0, 80);
 }
 
+function normalizeTaskScheduleSource(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "manual" || normalized === "auto" ? normalized : "";
+}
+
+function normalizeTaskScheduleDuration(value) {
+  const amount = Number(value || 0) || 0;
+  if (!amount) {
+    return 0;
+  }
+  const rounded = Math.round(amount / 15) * 15;
+  return Math.max(15, Math.min(180, rounded));
+}
+
 function getDefaultScheduledTimestamp(cleaned, now = new Date()) {
   const scheduled = new Date(now);
   scheduled.setSeconds(0, 0);
@@ -3337,6 +3375,228 @@ function formatTaskScheduleLabel(scheduledAt, scheduledLabel = "") {
   return formatTaskDueLabel(timestamp, scheduledLabel);
 }
 
+function formatTaskScheduleSourceLabel(entry) {
+  const source = normalizeTaskScheduleSource(entry?.scheduledSource);
+  if (!source) {
+    return "";
+  }
+  return source === "manual" ? "manual slot" : "auto slot";
+}
+
+function estimateTaskScheduleDuration(entry) {
+  const explicit = normalizeTaskScheduleDuration(entry?.scheduledDurationMinutes);
+  if (explicit) {
+    return explicit;
+  }
+
+  const openSubtasks = Array.isArray(entry?.subtasks) ? entry.subtasks.filter((item) => !item.completed).length : 0;
+  const progress = getTaskProgressValue(entry);
+  let minutes = openSubtasks >= 4 ? 90 : openSubtasks >= 2 ? 60 : 45;
+
+  if (progress >= 70) {
+    minutes -= 15;
+  } else if (progress <= 15 && openSubtasks >= 3) {
+    minutes += 15;
+  }
+
+  if (normalizeTaskWorkflowStatus(entry?.workflowStatus) === "active") {
+    minutes += 15;
+  }
+
+  return normalizeTaskScheduleDuration(minutes);
+}
+
+function getRoundedQuarterTimestamp(timestamp = Date.now()) {
+  const next = new Date(timestamp);
+  next.setSeconds(0, 0);
+  const roundedMinutes = Math.ceil(next.getMinutes() / 15) * 15;
+  if (roundedMinutes >= 60) {
+    next.setHours(next.getHours() + 1, 0, 0, 0);
+  } else {
+    next.setMinutes(roundedMinutes, 0, 0);
+  }
+  return next.getTime();
+}
+
+function getTodayPlanningWindow(nowTs = Date.now()) {
+  const todayStart = getTodayStartTimestamp();
+  const now = new Date(nowTs);
+  const dayStart = new Date(todayStart);
+  dayStart.setHours(10, 0, 0, 0);
+  const dayEnd = new Date(todayStart);
+  dayEnd.setHours(18, 30, 0, 0);
+  const start = Math.max(dayStart.getTime(), getRoundedQuarterTimestamp(now.getTime() + 10 * 60 * 1000));
+  return {
+    start,
+    end: dayEnd.getTime(),
+    todayStart
+  };
+}
+
+function doScheduleBlocksOverlap(startA, endA, startB, endB) {
+  return startA < endB && endA > startB;
+}
+
+function getNextOpenPlanningSlot(cursorTs, durationMinutes, reservedBlocks, planningEndTs) {
+  let startTs = Math.max(cursorTs, getRoundedQuarterTimestamp(cursorTs));
+  const durationMs = normalizeTaskScheduleDuration(durationMinutes || 45) * 60 * 1000;
+  const sortedBlocks = [...reservedBlocks].sort((a, b) => a.start - b.start);
+
+  while (startTs + durationMs <= planningEndTs) {
+    const overlap = sortedBlocks.find((block) => doScheduleBlocksOverlap(startTs, startTs + durationMs, block.start, block.end));
+    if (!overlap) {
+      return startTs;
+    }
+    startTs = getRoundedQuarterTimestamp(overlap.end + 15 * 60 * 1000);
+  }
+
+  return 0;
+}
+
+function buildAutoTodayPlan(userId = getCurrentUserId()) {
+  const now = Date.now();
+  const { start, end, todayStart } = getTodayPlanningWindow(now);
+  if (start >= end) {
+    return {
+      changed: false,
+      summary: "today is basically closed out — tomorrow needs the next rebuild.",
+      scheduled: [],
+      preserved: [],
+      carryOver: []
+    };
+  }
+
+  const entries = getTaskEntriesForUser(userId).filter((entry) => entry?.title && !entry.completed);
+  const manualBlocks = [];
+  const preserved = [];
+  const autoCandidates = [];
+  const carryOver = [];
+
+  entries.forEach((entry) => {
+    const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+    const source = normalizeTaskScheduleSource(entry?.scheduledSource);
+    const duration = estimateTaskScheduleDuration(entry);
+    const isToday = Boolean(scheduledAt && scheduledAt >= todayStart && scheduledAt < todayStart + 86400000);
+    const isReady = !getTaskDependencyState(entry, userId).blocking.length && normalizeTaskWorkflowStatus(entry?.workflowStatus) !== "blocked";
+
+    if (scheduledAt && scheduledAt < todayStart) {
+      carryOver.push(entry.title);
+    }
+
+    if (isToday && source === "manual") {
+      manualBlocks.push({
+        title: entry.title,
+        start: scheduledAt,
+        end: scheduledAt + duration * 60 * 1000
+      });
+      preserved.push(entry.title);
+      return;
+    }
+
+    if (scheduledAt && source === "manual") {
+      return;
+    }
+
+    if (isReady) {
+      autoCandidates.push(entry);
+    }
+  });
+
+  const sortedCandidates = autoCandidates
+    .sort((a, b) => {
+      const rankDiff = getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId);
+      if (rankDiff) {
+        return rankDiff;
+      }
+      return normalizeTaskMilestone(a.milestone).localeCompare(normalizeTaskMilestone(b.milestone));
+    });
+
+  const maxAutoTasks = Math.max(0, Math.min(5, Math.floor((end - start) / (60 * 60 * 1000))));
+  const reservedBlocks = [...manualBlocks];
+  const scheduled = [];
+  let cursor = start;
+
+  sortedCandidates.forEach((entry) => {
+    if (scheduled.length >= maxAutoTasks) {
+      return;
+    }
+    const duration = estimateTaskScheduleDuration(entry);
+    const slotStart = getNextOpenPlanningSlot(cursor, duration, reservedBlocks, end);
+    if (!slotStart) {
+      return;
+    }
+
+    const slot = {
+      title: entry.title,
+      scheduledAt: slotStart,
+      scheduledLabel: formatTaskDueLabel(slotStart, ""),
+      scheduledSource: "auto",
+      scheduledDurationMinutes: duration
+    };
+
+    setTaskPlanningState(entry.title, slot, userId);
+    reservedBlocks.push({
+      title: entry.title,
+      start: slotStart,
+      end: slotStart + duration * 60 * 1000
+    });
+    scheduled.push(slot);
+    cursor = slotStart + duration * 60 * 1000 + 15 * 60 * 1000;
+  });
+
+  entries.forEach((entry) => {
+    const source = normalizeTaskScheduleSource(entry?.scheduledSource);
+    const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+    const isToday = Boolean(scheduledAt && scheduledAt >= todayStart && scheduledAt < todayStart + 86400000);
+    const wasAutoScheduledToday = isToday && source === "auto";
+    const stillScheduled = scheduled.some((item) => item.title === entry.title);
+    if (wasAutoScheduledToday && !stillScheduled) {
+      setTaskPlanningState(entry.title, {
+        scheduledAt: 0,
+        scheduledLabel: "",
+        scheduledSource: "",
+        scheduledDurationMinutes: 0
+      }, userId);
+    }
+  });
+
+  const summary = scheduled.length
+    ? `rebuilt today’s plan with ${scheduled.length} auto slot${scheduled.length === 1 ? "" : "s"}${preserved.length ? ` and kept ${preserved.length} manual` : ""}.`
+    : preserved.length
+      ? `kept ${preserved.length} manual plan slot${preserved.length === 1 ? "" : "s"}; no additional ready tasks fit today.`
+      : "no ready tasks were available to auto-plan today.";
+
+  return {
+    changed: Boolean(scheduled.length),
+    summary,
+    scheduled: scheduled.map((item) => `${item.title} at ${formatTaskScheduleLabel(item.scheduledAt, item.scheduledLabel)}`),
+    preserved,
+    carryOver: carryOver.slice(0, 3)
+  };
+}
+
+function clearAutoTodayPlan(userId = getCurrentUserId()) {
+  const todayStart = getTodayStartTimestamp();
+  const entries = getTaskEntriesForUser(userId).filter((entry) => entry?.title && !entry.completed);
+  let cleared = 0;
+
+  entries.forEach((entry) => {
+    const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+    const source = normalizeTaskScheduleSource(entry?.scheduledSource);
+    if (source === "auto" && scheduledAt >= todayStart && scheduledAt < todayStart + 86400000) {
+      setTaskPlanningState(entry.title, {
+        scheduledAt: 0,
+        scheduledLabel: "",
+        scheduledSource: "",
+        scheduledDurationMinutes: 0
+      }, userId);
+      cleared += 1;
+    }
+  });
+
+  return cleared;
+}
+
 function buildTaskOwnershipParts(entry) {
   const parts = [];
   const priority = normalizeTaskPriority(entry?.priority);
@@ -3361,6 +3621,11 @@ function buildTaskOwnershipParts(entry) {
   const scheduleText = formatTaskScheduleLabel(entry?.scheduledAt, entry?.scheduledLabel);
   if (scheduleText) {
     parts.push(`plan ${scheduleText}`);
+  }
+
+  const scheduleSource = formatTaskScheduleSourceLabel(entry);
+  if (scheduleSource) {
+    parts.push(scheduleSource);
   }
 
   const dueText = formatTaskDueLabel(entry?.dueAt, entry?.dueLabel);
@@ -3434,6 +3699,8 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     sessionEndsAt: Number(entry.sessionEndsAt || 0) || 0,
     scheduledAt: Number(entry.scheduledAt || 0) || 0,
     scheduledLabel: normalizeTaskTextField(entry.scheduledLabel || "", 120),
+    scheduledSource: normalizeTaskScheduleSource(entry.scheduledSource),
+    scheduledDurationMinutes: normalizeTaskScheduleDuration(entry.scheduledDurationMinutes),
     reminderAt: Number(entry.reminderAt || 0) || 0,
     reminderLabel: normalizeTaskTextField(entry.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(entry.reminderCadence),
@@ -3472,6 +3739,8 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     sessionEndsAt: Number(nextValue?.sessionEndsAt || 0) || 0,
     scheduledAt: Number(nextValue?.scheduledAt || 0) || 0,
     scheduledLabel: normalizeTaskTextField(nextValue?.scheduledLabel || "", 120),
+    scheduledSource: normalizeTaskScheduleSource(nextValue?.scheduledSource),
+    scheduledDurationMinutes: normalizeTaskScheduleDuration(nextValue?.scheduledDurationMinutes),
     reminderAt: Number(nextValue?.reminderAt || 0) || 0,
     reminderLabel: normalizeTaskTextField(nextValue?.reminderLabel || "", 120),
     reminderCadence: normalizeTaskReminderCadence(nextValue?.reminderCadence),
@@ -3528,6 +3797,8 @@ function setTaskOwnershipState(title, fields, userId = getCurrentUserId()) {
       milestone: fields?.milestone ?? current.milestone,
       scheduledAt: fields?.scheduledAt ?? current.scheduledAt,
       scheduledLabel: fields?.scheduledLabel ?? current.scheduledLabel,
+      scheduledSource: fields?.scheduledSource ?? current.scheduledSource,
+      scheduledDurationMinutes: fields?.scheduledDurationMinutes ?? current.scheduledDurationMinutes,
       dueAt: fields?.dueAt ?? current.dueAt,
       dueLabel: fields?.dueLabel ?? current.dueLabel
     }),
@@ -3536,10 +3807,22 @@ function setTaskOwnershipState(title, fields, userId = getCurrentUserId()) {
 }
 
 function setTaskPlanningState(title, fields, userId = getCurrentUserId()) {
+  const current = readTaskEntry(title, userId);
+  const hasScheduleUpdate = fields?.scheduledAt !== undefined || fields?.scheduledLabel !== undefined || fields?.scheduledSource !== undefined || fields?.scheduledDurationMinutes !== undefined;
   return setTaskOwnershipState(title, {
     milestone: fields?.milestone,
     scheduledAt: fields?.scheduledAt,
-    scheduledLabel: fields?.scheduledLabel
+    scheduledLabel: fields?.scheduledLabel,
+    scheduledSource: hasScheduleUpdate
+      ? fields?.scheduledAt
+        ? normalizeTaskScheduleSource(fields?.scheduledSource ?? "manual")
+        : ""
+      : current.scheduledSource,
+    scheduledDurationMinutes: hasScheduleUpdate
+      ? fields?.scheduledAt
+        ? normalizeTaskScheduleDuration(fields?.scheduledDurationMinutes || current.scheduledDurationMinutes || 45)
+        : 0
+      : current.scheduledDurationMinutes
   }, userId);
 }
 
@@ -4810,6 +5093,8 @@ function renderStartupDashboard() {
 
         const metaParts = [
           item.bucket,
+          item.source ? `${item.source} slot` : "",
+          item.durationMinutes ? `${item.durationMinutes} min` : "",
           item.milestone ? `milestone ${item.milestone}` : "",
           item.next ? `next ${item.next}` : "",
           ...item.meta
