@@ -7372,6 +7372,7 @@ function renderTaskRelatedList(currentTitle) {
       event.dataTransfer?.setData("text/plain", normalized);
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setDragImage(row, 28, Math.max(18, Math.round(row.offsetHeight / 2)));
       }
     });
     drag.addEventListener("dragend", () => {
@@ -7379,6 +7380,9 @@ function renderTaskRelatedList(currentTitle) {
       row.classList.remove("is-dragging");
       taskRelatedList.querySelectorAll(".task-related-item").forEach((item) => item.classList.remove("is-drag-target"));
     });
+
+    const actions = document.createElement("div");
+    actions.className = "task-subtask-actions task-related-actions";
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -7393,8 +7397,9 @@ function renderTaskRelatedList(currentTitle) {
 
     row.appendChild(drag);
     row.appendChild(link);
-    row.appendChild(remove);
-    row.appendChild(check);
+    actions.appendChild(check);
+    actions.appendChild(remove);
+    row.appendChild(actions);
     taskRelatedList.appendChild(row);
   });
 }
@@ -7509,6 +7514,7 @@ function renderTaskSubtasks(title) {
       event.dataTransfer?.setData("text/plain", subtask.id);
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setDragImage(row, 28, Math.max(18, Math.round(row.offsetHeight / 2)));
       }
     });
     drag.addEventListener("dragend", () => {
@@ -7531,8 +7537,8 @@ function renderTaskSubtasks(title) {
       renderStartupDashboard();
     });
 
-    actions.appendChild(remove);
     actions.appendChild(check);
+    actions.appendChild(remove);
 
     row.appendChild(drag);
     row.appendChild(label);
