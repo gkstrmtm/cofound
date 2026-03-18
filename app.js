@@ -22,6 +22,8 @@ const projectsLeftEl = document.getElementById("projectsLeft");
 const startupBriefingSummary = document.getElementById("startupBriefingSummary");
 const startupBoardAlerts = document.getElementById("startupBoardAlerts");
 const startupFocusList = document.getElementById("startupFocusList");
+const startupWeeklyReviewSummary = document.getElementById("startupWeeklyReviewSummary");
+const startupWeeklyReviewList = document.getElementById("startupWeeklyReviewList");
 const startupMilestoneSummary = document.getElementById("startupMilestoneSummary");
 const startupMilestoneList = document.getElementById("startupMilestoneList");
 const startupTodayPlanSummary = document.getElementById("startupTodayPlanSummary");
@@ -1490,6 +1492,7 @@ function maybeHandleLocalVoiceCommand(text) {
   const getTodayPlanCommandReply = () => buildTodayPlanReply();
   const getTomorrowPlanCommandReply = () => buildTomorrowPlanReply();
   const getMilestoneStatusReply = (target = "") => buildMilestoneStatusReply(target);
+  const getWeeklyReviewReply = (section = "all") => buildWeeklyReviewReply(section);
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1932,6 +1935,34 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: getMilestoneStatusReply()
+    };
+  }
+
+  if (/(?:weekly review|week in review|this week review|operating review|weekly recap)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getWeeklyReviewReply()
+    };
+  }
+
+  if (/(?:wins this week|what shipped this week|what went well this week)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getWeeklyReviewReply("wins")
+    };
+  }
+
+  if (/(?:slips this week|what slipped this week|what went sideways this week)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getWeeklyReviewReply("slips")
+    };
+  }
+
+  if (/(?:next bets|what are the next bets|what should we bet on next)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getWeeklyReviewReply("bets")
     };
   }
 
@@ -3214,6 +3245,97 @@ function buildMilestoneStatusReply(targetMilestone = "", userId = getCurrentUser
 
   const lead = data.rollups.slice(0, 3).map((item) => `${item.milestone} ${item.health}`).join("; ");
   return `${data.summary} ${lead}.`.trim();
+}
+
+function getWeekStartTimestamp() {
+  const now = new Date();
+  const day = now.getDay();
+  const diff = (day + 6) % 7;
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  start.setDate(start.getDate() - diff);
+  return start.getTime();
+}
+
+function getWeeklyReviewData(userId = getCurrentUserId()) {
+  const weekStart = getWeekStartTimestamp();
+  const entries = getTaskEntriesForUser(userId);
+  const openEntries = entries.filter((entry) => !entry.completed);
+  const shipped = entries
+    .filter((entry) => entry.completed && Number(entry.updatedAt || 0) >= weekStart)
+    .sort((a, b) => (Number(b.updatedAt || 0) || 0) - (Number(a.updatedAt || 0) || 0));
+  const slipped = openEntries
+    .filter((entry) => {
+      const blocked = normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked" || getTaskDependencyState(entry, userId).blocking.length;
+      const overdue = isTaskReminderOverdue(entry) || (Number(entry?.dueAt || 0) && Number(entry.dueAt) < Date.now());
+      const dueSoonUnplanned = Number(entry?.dueAt || 0) && Number(entry.dueAt) <= Date.now() + 48 * 60 * 60 * 1000 && !Number(entry?.scheduledAt || 0);
+      return blocked || overdue || dueSoonUnplanned;
+    })
+    .sort((a, b) => getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId));
+  const nextBets = openEntries
+    .filter((entry) => !slipped.some((item) => item.title === entry.title))
+    .filter((entry) => !(normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked" || getTaskDependencyState(entry, userId).blocking.length))
+    .sort((a, b) => getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId))
+    .slice(0, 3);
+  const touchedCount = entries.filter((entry) => Number(entry.updatedAt || 0) >= weekStart).length;
+
+  const summary = !entries.length
+    ? "no board movement yet this week."
+    : `this week: ${shipped.length} shipped · ${slipped.length} slipping · ${touchedCount} touched.`;
+
+  return {
+    summary,
+    wins: shipped.slice(0, 4).map((entry) => ({
+      title: entry.title,
+      meta: [normalizeTaskMilestone(entry.milestone) ? `milestone ${normalizeTaskMilestone(entry.milestone)}` : "", formatRelativeTime(Date.now() - Number(entry.updatedAt || 0))].filter(Boolean).join(" · ")
+    })),
+    slips: slipped.slice(0, 4).map((entry) => ({
+      title: entry.title,
+      meta: [
+        buildTaskDependencySummary(entry, userId) || entry.blocker || "needs attention",
+        Number(entry?.dueAt || 0) ? `due ${formatTaskDueLabel(entry.dueAt, entry.dueLabel)}` : "",
+        normalizeTaskMilestone(entry.milestone) ? `milestone ${normalizeTaskMilestone(entry.milestone)}` : ""
+      ].filter(Boolean).slice(0, 2).join(" · ")
+    })),
+    bets: nextBets.map((entry) => ({
+      title: entry.title,
+      meta: [
+        `next ${getTaskNextActionText(entry)}`,
+        normalizeTaskMilestone(entry.milestone) ? `milestone ${normalizeTaskMilestone(entry.milestone)}` : "",
+        Number(entry?.scheduledAt || 0) ? `plan ${formatTaskScheduleLabel(entry.scheduledAt, entry.scheduledLabel)}` : ""
+      ].filter(Boolean).slice(0, 2).join(" · ")
+    })),
+    shippedCount: shipped.length,
+    slippingCount: slipped.length,
+    touchedCount
+  };
+}
+
+function buildWeeklyReviewReply(section = "all", userId = getCurrentUserId()) {
+  const review = getWeeklyReviewData(userId);
+  if (!review.wins.length && !review.slips.length && !review.bets.length) {
+    return review.summary;
+  }
+
+  if (section === "wins") {
+    return review.wins.length
+      ? `wins this week: ${review.wins.map((item) => item.title).join(", ")}.`
+      : "no wins landed yet this week.";
+  }
+  if (section === "slips") {
+    return review.slips.length
+      ? `slipping this week: ${review.slips.map((item) => item.title).join(", ")}.`
+      : "nothing looks like it's slipping right now.";
+  }
+  if (section === "bets") {
+    return review.bets.length
+      ? `next bets: ${review.bets.map((item) => item.title).join(", ")}.`
+      : "no clear next bets yet — the board needs more signal.";
+  }
+
+  const winText = review.wins.length ? ` wins: ${review.wins.map((item) => item.title).join(", ")}.` : "";
+  const slipText = review.slips.length ? ` slips: ${review.slips.map((item) => item.title).join(", ")}.` : "";
+  const betText = review.bets.length ? ` next bets: ${review.bets.map((item) => item.title).join(", ")}.` : "";
+  return `${review.summary}${winText}${slipText}${betText}`.trim();
 }
 
 function getTodayStartTimestamp() {
@@ -4848,6 +4970,7 @@ function buildMessagesForApi() {
     .join("\n");
   const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
   const dailyBriefingSummary = buildDailyBriefingReply(currentUserId);
+  const weeklyReviewSummary = buildWeeklyReviewReply("all", currentUserId);
   const milestoneSummary = buildMilestoneStatusReply("", currentUserId);
   const todayPlanSummary = buildTodayPlanReply(currentUserId);
   const tomorrowPlanSummary = buildTomorrowPlanReply(currentUserId);
@@ -4918,6 +5041,9 @@ function buildMessagesForApi() {
   }
   if (dailyBriefingSummary) {
     sysParts.push(`daily board briefing: ${dailyBriefingSummary}`);
+  }
+  if (weeklyReviewSummary) {
+    sysParts.push(`weekly operating review: ${weeklyReviewSummary}`);
   }
   if (milestoneSummary) {
     sysParts.push(`milestone health: ${milestoneSummary}`);
@@ -5322,7 +5448,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupWeeklyReviewSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary) {
     return;
   }
 
@@ -5331,6 +5457,7 @@ function renderStartupDashboard() {
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
   const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
   const briefing = getDailyBriefingData(userId);
+  const weeklyReview = getWeeklyReviewData(userId);
   const milestoneStatus = getMilestoneStatusData(userId);
   const todayPlan = getTodayPlanData(userId);
   const tomorrowPlan = getTomorrowPlanData(userId);
@@ -5385,6 +5512,37 @@ function renderStartupDashboard() {
       }
 
       startupFocusList.appendChild(card);
+    });
+  }
+  if (startupWeeklyReviewSummary) {
+    startupWeeklyReviewSummary.textContent = weeklyReview.summary;
+  }
+  if (startupWeeklyReviewList) {
+    startupWeeklyReviewList.innerHTML = "";
+    const sections = [
+      { label: "wins", items: weeklyReview.wins },
+      { label: "slips", items: weeklyReview.slips },
+      { label: "next bets", items: weeklyReview.bets }
+    ];
+    sections.forEach((section) => {
+      const row = document.createElement("div");
+      row.className = "startup-review-item";
+
+      const labelEl = document.createElement("div");
+      labelEl.className = "startup-review-label";
+      labelEl.textContent = section.label;
+
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "startup-review-body";
+      if (!section.items.length) {
+        bodyEl.textContent = section.label === "wins" ? "no signal yet" : section.label === "slips" ? "clean right now" : "needs conviction";
+      } else {
+        bodyEl.textContent = section.items.map((item) => item.meta ? `${item.title} (${item.meta})` : item.title).join(" · ");
+      }
+
+      row.appendChild(labelEl);
+      row.appendChild(bodyEl);
+      startupWeeklyReviewList.appendChild(row);
     });
   }
   if (startupMilestoneSummary) {

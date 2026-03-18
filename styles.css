@@ -374,6 +374,12 @@ button {
   margin-top: 0.85rem;
 }
 
+.startup-review-list {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
 .startup-milestone-list {
   display: grid;
   gap: 0.6rem;
@@ -399,6 +405,29 @@ button {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-review-item {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.8rem 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-review-label {
+  color: var(--olive-deep);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.startup-review-body {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 .startup-plan-item {
