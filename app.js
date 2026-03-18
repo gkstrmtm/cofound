@@ -7360,15 +7360,12 @@ function renderTaskRelatedList(currentTitle) {
       renderTaskWorkspace();
     });
 
-    const actions = document.createElement("div");
-    actions.className = "task-related-actions";
-
-    const drag = document.createElement("button");
-    drag.type = "button";
-    drag.className = "task-drag-handle";
+    const drag = document.createElement("span");
+    drag.className = "task-drag-grip";
     drag.textContent = "⋮⋮";
     drag.draggable = true;
     drag.setAttribute("aria-label", `drag ${normalized}`);
+    drag.setAttribute("title", "drag to reorder");
     drag.addEventListener("dragstart", (event) => {
       draggedTaskTitle = normalized;
       row.classList.add("is-dragging");
@@ -7385,7 +7382,7 @@ function renderTaskRelatedList(currentTitle) {
 
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "task-subtask-mini";
+    remove.className = "task-delete-button";
     remove.textContent = "×";
     remove.setAttribute("aria-label", `delete ${normalized}`);
     remove.addEventListener("click", () => {
@@ -7394,11 +7391,9 @@ function renderTaskRelatedList(currentTitle) {
       renderStartupDashboard();
     });
 
-    actions.appendChild(drag);
-    actions.appendChild(remove);
-
+    row.appendChild(drag);
     row.appendChild(link);
-    row.appendChild(actions);
+    row.appendChild(remove);
     row.appendChild(check);
     taskRelatedList.appendChild(row);
   });
@@ -7447,13 +7442,14 @@ function renderTaskSubtasks(title) {
 
     const label = document.createElement("textarea");
     label.spellcheck = false;
-    label.rows = 1;
+    label.rows = 2;
     label.className = "task-subtask-title";
     label.value = subtask.title;
     label.setAttribute("aria-label", "subtask title");
+    label.setAttribute("wrap", "soft");
     const resizeLabel = () => {
-      label.style.height = "auto";
-      label.style.height = `${label.scrollHeight}px`;
+      label.style.height = "0px";
+      label.style.height = `${Math.max(label.scrollHeight + 8, 68)}px`;
     };
     const originalTitle = subtask.title;
     const saveSubtaskTitle = () => {
@@ -7501,15 +7497,12 @@ function renderTaskSubtasks(title) {
       renderStartupDashboard();
     });
 
-    const actions = document.createElement("div");
-    actions.className = "task-subtask-actions";
-
-    const drag = document.createElement("button");
-    drag.type = "button";
-    drag.className = "task-drag-handle";
+    const drag = document.createElement("span");
+    drag.className = "task-drag-grip";
     drag.textContent = "⋮⋮";
     drag.draggable = true;
     drag.setAttribute("aria-label", `drag ${subtask.title}`);
+    drag.setAttribute("title", "drag to reorder");
     drag.addEventListener("dragstart", (event) => {
       draggedSubtaskId = subtask.id;
       row.classList.add("is-dragging");
@@ -7524,9 +7517,12 @@ function renderTaskSubtasks(title) {
       taskSubtaskList.querySelectorAll(".task-subtask-item").forEach((item) => item.classList.remove("is-drag-target"));
     });
 
+    const actions = document.createElement("div");
+    actions.className = "task-subtask-actions";
+
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "task-subtask-mini";
+    remove.className = "task-delete-button";
     remove.textContent = "×";
     remove.setAttribute("aria-label", `delete ${subtask.title}`);
     remove.addEventListener("click", () => {
@@ -7535,10 +7531,10 @@ function renderTaskSubtasks(title) {
       renderStartupDashboard();
     });
 
-    actions.appendChild(drag);
     actions.appendChild(remove);
     actions.appendChild(check);
 
+    row.appendChild(drag);
     row.appendChild(label);
     row.appendChild(actions);
     taskSubtaskList.appendChild(row);
