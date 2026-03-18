@@ -6845,7 +6845,6 @@ function renderStartupDashboard() {
   const tomorrowPlan = getTomorrowPlanData(userId);
   const standup = getBoardStandupData(userId);
   const timeline = getBoardTimelineData(userId, 6);
-  const roadmap = readOperatorRoadmap();
   const riskRadar = getRiskRadarData(userId);
   const decisions = readDecisionLog(userId).slice(0, 4);
   const operatorState = readOperatorState(userId);
@@ -6854,16 +6853,20 @@ function renderStartupDashboard() {
   const plansTodayCount = todayPlan.planned.length || todayPlan.carryOver.length;
   const plansSummary = String(plansTodayCount);
   const healthSummary = String(riskRadar.risky.length);
-  const operatorSummary = String(roadmap.length);
+  const operatorSummary = String(decisions.length);
 
   const pulseMeta = briefing.alerts.length
     ? `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}`
     : "board calm";
   const plansMeta = `tomorrow ${tomorrowPlan.planned.length}`;
-  const healthMeta = `milestones ${milestoneStatus.rollups.length}`;
-  const operatorMeta = decisions.length
-    ? `${decisions.length} decision${decisions.length === 1 ? "" : "s"}`
-    : "no decisions";
+  const healthMeta = milestoneStatus.rollups.length
+    ? `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}`
+    : "nothing slipping";
+  const operatorMeta = operatorState.focusTaskTitle
+    ? `focus ${operatorState.focusTaskTitle}`
+    : decisions.length
+      ? "recent calls saved"
+      : "nothing logged";
 
   if (projectsLeftEl) {
     projectsLeftEl.textContent = String(remainingCount);
@@ -7123,11 +7126,13 @@ function renderStartupDashboard() {
     }
   }
   if (startupRoadmapSummary) {
-    startupRoadmapSummary.textContent = `${roadmap.length} operator systems are now live in anna.`;
+    startupRoadmapSummary.textContent = decisions.length
+      ? `${decisions.length} recent decision${decisions.length === 1 ? "" : "s"} saved.`
+      : "no recent decisions saved yet.";
   }
   if (startupRoadmapList) {
     startupRoadmapList.innerHTML = "";
-    roadmap.forEach((item) => {
+    decisions.forEach((decision) => {
       const row = document.createElement("div");
       row.className = "startup-ops-item";
 
@@ -7136,15 +7141,17 @@ function renderStartupDashboard() {
 
       const titleEl = document.createElement("div");
       titleEl.className = "startup-ops-title";
-      titleEl.textContent = item.title;
+      titleEl.textContent = decision.summary;
 
       const statusEl = document.createElement("div");
       statusEl.className = "startup-ops-status";
-      statusEl.textContent = item.status;
+      statusEl.textContent = decision.taskTitle ? "task" : "board";
 
       const copy = document.createElement("div");
       copy.className = "startup-ops-copy";
-      copy.textContent = item.description;
+      copy.textContent = [decision.taskTitle, decision.followUp, decision.rationale]
+        .filter(Boolean)
+        .join(" · ") || "saved decision";
 
       head.appendChild(titleEl);
       head.appendChild(statusEl);
@@ -7152,6 +7159,12 @@ function renderStartupDashboard() {
       row.appendChild(copy);
       startupRoadmapList.appendChild(row);
     });
+    if (!decisions.length) {
+      const empty = document.createElement("div");
+      empty.className = "startup-ops-item";
+      empty.textContent = "no decisions logged yet.";
+      startupRoadmapList.appendChild(empty);
+    }
   }
   if (startupRiskSummary) {
     startupRiskSummary.textContent = riskRadar.summary;
@@ -7194,34 +7207,32 @@ function renderStartupDashboard() {
     }
   }
   if (startupMeetingSummary) {
-    startupMeetingSummary.textContent = `${getMeetingModeSummary(userId)} ${getFocusModeSummary(userId)}`.trim();
+    startupMeetingSummary.textContent = operatorState.focusTaskTitle
+      ? `focus is on ${operatorState.focusTaskTitle}`
+      : operatorState.meetingActive
+        ? getMeetingModeSummary(userId)
+        : decisions.length
+          ? `${decisions.length} recent decision${decisions.length === 1 ? "" : "s"} saved`
+          : "no decisions logged yet";
   }
   if (startupDecisionList) {
     startupDecisionList.innerHTML = "";
 
-    const meetingItem = document.createElement("div");
-    meetingItem.className = "startup-ops-item";
-    const meetingTitle = document.createElement("div");
-    meetingTitle.className = "startup-ops-title";
-    meetingTitle.textContent = "meeting mode";
-    const meetingCopy = document.createElement("div");
-    meetingCopy.className = "startup-ops-copy";
-    meetingCopy.textContent = getMeetingModeSummary(userId);
-    meetingItem.appendChild(meetingTitle);
-    meetingItem.appendChild(meetingCopy);
-    startupDecisionList.appendChild(meetingItem);
-
-    const focusItem = document.createElement("div");
-    focusItem.className = "startup-ops-item";
-    const focusTitle = document.createElement("div");
-    focusTitle.className = "startup-ops-title";
-    focusTitle.textContent = "focus mode";
-    const focusCopy = document.createElement("div");
-    focusCopy.className = "startup-ops-copy";
-    focusCopy.textContent = getFocusModeSummary(userId);
-    focusItem.appendChild(focusTitle);
-    focusItem.appendChild(focusCopy);
-    startupDecisionList.appendChild(focusItem);
+    if (operatorState.focusTaskTitle || operatorState.meetingActive) {
+      const statusItem = document.createElement("div");
+      statusItem.className = "startup-ops-item";
+      const statusTitle = document.createElement("div");
+      statusTitle.className = "startup-ops-title";
+      statusTitle.textContent = "right now";
+      const statusCopy = document.createElement("div");
+      statusCopy.className = "startup-ops-copy";
+      statusCopy.textContent = operatorState.focusTaskTitle
+        ? `focus is on ${operatorState.focusTaskTitle}`
+        : getMeetingModeSummary(userId);
+      statusItem.appendChild(statusTitle);
+      statusItem.appendChild(statusCopy);
+      startupDecisionList.appendChild(statusItem);
+    }
 
     decisions.forEach((decision) => {
       const row = document.createElement("div");
@@ -7239,6 +7250,13 @@ function renderStartupDashboard() {
       row.appendChild(meta);
       startupDecisionList.appendChild(row);
     });
+
+    if (!decisions.length && !operatorState.focusTaskTitle && !operatorState.meetingActive) {
+      const empty = document.createElement("div");
+      empty.className = "startup-ops-item";
+      empty.textContent = "no decisions logged yet.";
+      startupDecisionList.appendChild(empty);
+    }
   }
   if (startupTimelineList) {
     startupTimelineList.innerHTML = "";

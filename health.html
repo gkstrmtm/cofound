@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>health</title>
+    <title>watchouts</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,7 +15,7 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="app-frame" aria-label="health">
+      <section class="app-frame" aria-label="watchouts">
         <header class="topbar">
           <button class="icon-button" id="menuButton" aria-label="menu" type="button">
             <span></span>
@@ -46,30 +46,30 @@
             <nav class="menu-list" aria-label="menu items">
               <a class="menu-item" href="index.html">talk to anna</a>
               <a class="menu-item" href="startup.html">your startup</a>
-              <a class="menu-item" href="pulse.html">daily pulse</a>
-              <a class="menu-item" href="plans.html">plans</a>
-              <a class="menu-item" href="operator.html">operator</a>
+              <a class="menu-item" href="pulse.html">focus</a>
+              <a class="menu-item" href="plans.html">plan</a>
+              <a class="menu-item" href="operator.html">decisions</a>
             </nav>
           </div>
         </aside>
 
         <section class="startup-stage" aria-live="polite">
-          <h1 class="startup-title">health</h1>
+          <h1 class="startup-title">watchouts</h1>
           <div class="startup-name" id="startupNameText">startup</div>
 
           <div class="startup-section-head">
-            <div class="startup-section-title">risk and progress</div>
-            <div class="startup-section-copy">weekly review, milestones, and board risk.</div>
+            <div class="startup-section-title">what could slip</div>
+            <div class="startup-section-copy">risks first, then milestones that need attention.</div>
           </div>
 
           <div class="startup-briefing-card">
             <div class="startup-briefing-header">
               <div>
-                <div class="startup-briefing-eyebrow">weekly review</div>
-                <div class="startup-briefing-summary" id="startupWeeklyReviewSummary">loading review...</div>
+                <div class="startup-briefing-eyebrow">watchouts</div>
+                <div class="startup-briefing-summary" id="startupRiskSummary">loading risk...</div>
               </div>
             </div>
-            <div class="startup-review-list" id="startupWeeklyReviewList"></div>
+            <div class="startup-review-list" id="startupRiskList"></div>
           </div>
 
           <div class="startup-briefing-card">
@@ -80,16 +80,6 @@
               </div>
             </div>
             <div class="startup-milestone-list" id="startupMilestoneList"></div>
-          </div>
-
-          <div class="startup-briefing-card">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">risk radar</div>
-                <div class="startup-briefing-summary" id="startupRiskSummary">loading risk...</div>
-              </div>
-            </div>
-            <div class="startup-review-list" id="startupRiskList"></div>
           </div>
         </section>
       </section>
