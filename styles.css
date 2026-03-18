@@ -1138,13 +1138,14 @@ button {
 
 .task-subtask-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.7rem;
 }
 
 .task-subtask-title {
   flex: 1;
   width: 100%;
+  min-height: 54px;
   padding: 0.82rem 0.9rem;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.18);
@@ -1152,6 +1153,17 @@ button {
   color: var(--olive);
   font-weight: 650;
   outline: none;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  line-height: 1.38;
+}
+
+.task-subtask-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.42rem;
+  flex: 0 0 auto;
 }
 
 .task-subtask-check {
@@ -1159,6 +1171,19 @@ button {
   height: 30px;
   border-radius: 9px;
   border: 2px solid rgba(53, 95, 0, 0.38);
+  background: rgba(255, 255, 255, 0.16);
+  display: grid;
+  place-items: center;
+  color: var(--olive-deep);
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.task-subtask-mini {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid rgba(96, 142, 60, 0.22);
   background: rgba(255, 255, 255, 0.16);
   display: grid;
   place-items: center;
@@ -1249,6 +1274,12 @@ button {
   display: flex;
   align-items: center;
   gap: 0.7rem;
+}
+
+.task-related-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
 }
 
 .task-related-item.is-active .task-related-link {

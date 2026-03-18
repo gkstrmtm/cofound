@@ -2404,6 +2404,32 @@ function maybeHandleLocalVoiceCommand(text) {
     };
   }
 
+  const deleteSubtaskMatch = normalized.match(/(?:delete|remove)\s+(?:the\s+)?(?:subtask|step)\s+(.+)/);
+  if (deleteSubtaskMatch && activeTaskTitle) {
+    const match = findSubtaskMatch(activeTaskTitle, deleteSubtaskMatch[1]);
+    if (match) {
+      deleteTaskSubtask(activeTaskTitle, match.id);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `deleted the step ${match.title}.`
+      };
+    }
+  }
+
+  const moveSubtaskMatch = normalized.match(/(?:move|reorder)\s+(?:the\s+)?(?:subtask|step)\s+(.+?)\s+(up|down|top|bottom)$/);
+  if (moveSubtaskMatch && activeTaskTitle) {
+    const match = findSubtaskMatch(activeTaskTitle, moveSubtaskMatch[1]);
+    if (match) {
+      moveTaskSubtask(activeTaskTitle, match.id, moveSubtaskMatch[2]);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `moved ${match.title} ${moveSubtaskMatch[2]}.`
+      };
+    }
+  }
+
   const renameSubtaskMatch = normalized.match(/(?:rename|change|replace)\s+(?:the\s+)?(?:subtask|step)\s+(.+?)\s+(?:to|with)\s+(.+)/);
   if (renameSubtaskMatch && activeTaskTitle) {
     const changed = renameCurrentTaskSubtask(renameSubtaskMatch[1], renameSubtaskMatch[2]);
@@ -2415,6 +2441,79 @@ function maybeHandleLocalVoiceCommand(text) {
     }
   }
 
+
+  const inlineRenameCurrentTaskMatch = normalized.match(/(?:rename|change|edit|update)\s+(?:this|current)\s+task\s+(?:to|into)\s+(.+)/);
+  if (inlineRenameCurrentTaskMatch && activeTaskTitle) {
+    const result = renameTask(activeTaskTitle, inlineRenameCurrentTaskMatch[1]);
+    if (result.changed) {
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `renamed ${activeTaskTitle} to ${normalizeTaskTitle(inlineRenameCurrentTaskMatch[1])}.`
+      };
+    }
+  }
+
+  const explicitRenameTaskMatch = normalized.match(/(?:rename|change|edit|update)\s+(?:the\s+)?task\s+(.+?)\s+(?:to|into)\s+(.+)/);
+  if (explicitRenameTaskMatch) {
+    const fromTitle = resolveTaskReference(explicitRenameTaskMatch[1], activeTaskTitle) || findMatchingTaskTitle(explicitRenameTaskMatch[1]);
+    if (fromTitle) {
+      const result = renameTask(fromTitle, explicitRenameTaskMatch[2]);
+      if (result.changed) {
+        refreshTaskViews();
+        return {
+          handled: true,
+          reply: `renamed ${fromTitle} to ${normalizeTaskTitle(explicitRenameTaskMatch[2])}.`
+        };
+      }
+    }
+  }
+
+  const deleteCurrentTaskMatch = activeTaskTitle && /(?:delete|remove)\s+(?:this|current)\s+task/.test(normalized);
+  if (deleteCurrentTaskMatch && activeTaskTitle) {
+    deleteTask(activeTaskTitle);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `deleted ${activeTaskTitle}.`
+    };
+  }
+
+  const deleteTaskMatch = normalized.match(/(?:delete|remove)\s+(?:the\s+)?task\s+(.+)/);
+  if (deleteTaskMatch) {
+    const taskTitle = resolveTaskReference(deleteTaskMatch[1], activeTaskTitle) || findMatchingTaskTitle(deleteTaskMatch[1]);
+    if (taskTitle) {
+      deleteTask(taskTitle);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `deleted ${taskTitle}.`
+      };
+    }
+  }
+
+  const moveCurrentTaskMatch = activeTaskTitle ? normalized.match(/(?:move|reorder)\s+(?:this|current)\s+task\s+(up|down|top|bottom)$/) : null;
+  if (moveCurrentTaskMatch && activeTaskTitle) {
+    moveTaskInLatestStartupList(activeTaskTitle, moveCurrentTaskMatch[1]);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `moved ${activeTaskTitle} ${moveCurrentTaskMatch[1]}.`
+    };
+  }
+
+  const moveTaskMatch = normalized.match(/(?:move|reorder)\s+(?:the\s+)?task\s+(.+?)\s+(up|down|top|bottom)$/);
+  if (moveTaskMatch) {
+    const taskTitle = resolveTaskReference(moveTaskMatch[1], activeTaskTitle) || findMatchingTaskTitle(moveTaskMatch[1]);
+    if (taskTitle) {
+      moveTaskInLatestStartupList(taskTitle, moveTaskMatch[2]);
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `moved ${taskTitle} ${moveTaskMatch[2]}.`
+      };
+    }
+  }
   const renameCurrentStepMatch = normalized.match(/(?:rename|change|edit|update)\s+(?:this|current)\s+(?:step|subtask)\s+(?:to|into)\s+(.+)/);
   if (renameCurrentStepMatch && activeTaskTitle) {
     const activeEntry = readTaskEntry(activeTaskTitle);
@@ -5235,6 +5334,71 @@ function renameTaskSubtask(title, subtaskId, nextTitle, userId = getCurrentUserI
   );
 }
 
+function deleteTaskSubtask(title, subtaskId, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => {
+      const subtasks = normalizeSubtaskList(current.subtasks);
+      const removed = subtasks.find((item) => item.id === subtaskId);
+      if (!removed) {
+        return current;
+      }
+      const nextSubtasks = subtasks.filter((item) => item.id !== subtaskId);
+      const nextOpen = nextSubtasks.find((item) => !item.completed)?.title || "";
+      return {
+        ...current,
+        subtasks: nextSubtasks,
+        nextAction: current.nextAction === removed.title ? nextOpen : current.nextAction,
+        progress: nextSubtasks.length ? getTaskProgressValue({ ...current, subtasks: nextSubtasks }) : current.progress
+      };
+    },
+    userId
+  );
+}
+
+function moveTaskSubtask(title, subtaskId, direction, userId = getCurrentUserId()) {
+  return updateTaskEntry(
+    title,
+    (current) => {
+      const subtasks = normalizeSubtaskList(current.subtasks);
+      const index = subtasks.findIndex((item) => item.id === subtaskId);
+      if (index < 0) {
+        return current;
+      }
+      let targetIndex = index;
+      if (direction === "up") targetIndex = Math.max(0, index - 1);
+      if (direction === "down") targetIndex = Math.min(subtasks.length - 1, index + 1);
+      if (direction === "top") targetIndex = 0;
+      if (direction === "bottom") targetIndex = subtasks.length - 1;
+      if (targetIndex === index) {
+        return current;
+      }
+      const nextSubtasks = [...subtasks];
+      const [moved] = nextSubtasks.splice(index, 1);
+      nextSubtasks.splice(targetIndex, 0, moved);
+      return {
+        ...current,
+        subtasks: nextSubtasks
+      };
+    },
+    userId
+  );
+}
+
+function findSubtaskMatch(taskTitle, text, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(text);
+  if (!normalized) {
+    return null;
+  }
+  const subtasks = readTaskEntry(taskTitle, userId).subtasks;
+  const exact = subtasks.find((item) => normalizeTaskTitle(item.title) === normalized);
+  if (exact) {
+    return exact;
+  }
+  const partial = subtasks.filter((item) => normalized.includes(item.title) || item.title.includes(normalized));
+  return partial.length === 1 ? partial[0] : null;
+}
+
 function renameTask(title, nextTitle, userId = getCurrentUserId()) {
   const currentTitle = normalizeTaskTitle(title);
   const normalizedNext = normalizeTaskTitle(nextTitle);
@@ -5317,6 +5481,108 @@ function renameTask(title, nextTitle, userId = getCurrentUserId()) {
   }
 
   return { changed: true, reason: "renamed", entry: readTaskEntry(normalizedNext, userId) };
+}
+
+function deleteTask(title, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(title);
+  if (!normalized) {
+    return false;
+  }
+
+  const store = readTaskStateStore();
+  const userMap = store && typeof store[userId] === "object" ? { ...store[userId] } : {};
+  delete userMap[makeTaskKey(normalized)];
+  store[userId] = userMap;
+  writeTaskStateStore(store);
+
+  const nextLists = readStartupLists().map((list) => {
+    if (String(list?.userId || "") !== userId || !Array.isArray(list?.items)) {
+      return list;
+    }
+    return {
+      ...list,
+      items: list.items.filter((item) => normalizeTaskTitle(item) !== normalized)
+    };
+  });
+  writeStartupLists(nextLists);
+
+  const nextDecisionLog = readJson(STORAGE_KEYS.decisionLog, []).filter((entry) => (
+    String(entry?.userId || "") !== userId || normalizeTaskTitle(entry?.taskTitle || "") !== normalized
+  ));
+  writeJson(STORAGE_KEYS.decisionLog, nextDecisionLog);
+
+  const operatorState = readOperatorState(userId);
+  if (operatorState.focusTaskTitle === normalized || normalizeTaskTitle(operatorState.meetingTopic) === normalized) {
+    writeOperatorStateForUser({
+      focusTaskTitle: operatorState.focusTaskTitle === normalized ? "" : operatorState.focusTaskTitle,
+      focusStartedAt: operatorState.focusTaskTitle === normalized ? 0 : operatorState.focusStartedAt,
+      focusEndsAt: operatorState.focusTaskTitle === normalized ? 0 : operatorState.focusEndsAt,
+      meetingTopic: normalizeTaskTitle(operatorState.meetingTopic) === normalized ? "" : operatorState.meetingTopic
+    }, userId);
+  }
+
+  const remaining = getLatestStartupItems(userId);
+  const nextActive = remaining.find((item) => normalizeTaskTitle(item) !== normalized) || "";
+  if (getCurrentTaskTitle() === normalized) {
+    if (nextActive) {
+      setActiveTaskContext(nextActive);
+      if (window.location.pathname.endsWith("task.html")) {
+        window.history.replaceState({}, "", buildTaskHref(nextActive));
+      }
+    } else {
+      removeStoredValue(STORAGE_KEYS.activeTask);
+      if (window.location.pathname.endsWith("task.html")) {
+        window.history.replaceState({}, "", "task.html");
+      }
+    }
+  }
+  renderStartupDashboard();
+  renderTaskWorkspace();
+  return true;
+}
+
+function moveTaskInLatestStartupList(title, direction, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(title);
+  if (!normalized) {
+    return null;
+  }
+  return updateLatestStartupListForUser((list) => {
+    const items = Array.isArray(list.items) ? list.items.map((item) => normalizeTaskTitle(item)).filter(Boolean) : [];
+    const index = items.findIndex((item) => item === normalized);
+    if (index < 0) {
+      return list;
+    }
+    let targetIndex = index;
+    if (direction === "up") targetIndex = Math.max(0, index - 1);
+    if (direction === "down") targetIndex = Math.min(items.length - 1, index + 1);
+    if (direction === "top") targetIndex = 0;
+    if (direction === "bottom") targetIndex = items.length - 1;
+    if (targetIndex === index) {
+      return list;
+    }
+    const nextItems = [...items];
+    const [moved] = nextItems.splice(index, 1);
+    nextItems.splice(targetIndex, 0, moved);
+    return {
+      ...list,
+      items: nextItems
+    };
+  }, userId);
+}
+
+const taskActionFeedback = new Map();
+
+function setTaskActionFeedback(title, message) {
+  const normalized = normalizeTaskTitle(title);
+  if (!normalized) {
+    return;
+  }
+  taskActionFeedback.set(normalized, String(message || "").trim());
+}
+
+function getTaskActionFeedback(title, fallback) {
+  const normalized = normalizeTaskTitle(title);
+  return taskActionFeedback.get(normalized) || fallback;
 }
 
 function getTaskProgressValue(entry) {
@@ -7023,7 +7289,48 @@ function renderTaskRelatedList(currentTitle) {
       renderTaskWorkspace();
     });
 
+    const actions = document.createElement("div");
+    actions.className = "task-related-actions";
+
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "task-subtask-mini";
+    up.textContent = "↑";
+    up.setAttribute("aria-label", `move ${normalized} up`);
+    up.addEventListener("click", () => {
+      moveTaskInLatestStartupList(normalized, "up");
+      renderTaskRelatedList(getCurrentTaskTitle());
+      renderStartupDashboard();
+    });
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.className = "task-subtask-mini";
+    down.textContent = "↓";
+    down.setAttribute("aria-label", `move ${normalized} down`);
+    down.addEventListener("click", () => {
+      moveTaskInLatestStartupList(normalized, "down");
+      renderTaskRelatedList(getCurrentTaskTitle());
+      renderStartupDashboard();
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "task-subtask-mini";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `delete ${normalized}`);
+    remove.addEventListener("click", () => {
+      deleteTask(normalized);
+      renderTaskRelatedList(getCurrentTaskTitle());
+      renderStartupDashboard();
+    });
+
+    actions.appendChild(up);
+    actions.appendChild(down);
+    actions.appendChild(remove);
+
     row.appendChild(link);
+    row.appendChild(actions);
     row.appendChild(check);
     taskRelatedList.appendChild(row);
   });
@@ -7049,20 +7356,26 @@ function renderTaskSubtasks(title) {
     const row = document.createElement("div");
     row.className = `task-subtask-item${subtask.completed ? " is-complete" : ""}`;
 
-    const label = document.createElement("input");
-    label.type = "text";
+    const label = document.createElement("textarea");
     label.spellcheck = false;
+    label.rows = 1;
     label.className = "task-subtask-title";
     label.value = subtask.title;
     label.setAttribute("aria-label", "subtask title");
+    const resizeLabel = () => {
+      label.style.height = "auto";
+      label.style.height = `${label.scrollHeight}px`;
+    };
     const originalTitle = subtask.title;
     const saveSubtaskTitle = () => {
       const nextTitle = String(label.value || "").trim();
       if (!nextTitle) {
         label.value = originalTitle;
+        resizeLabel();
         return;
       }
       if (nextTitle === originalTitle) {
+        resizeLabel();
         return;
       }
       renameTaskSubtask(title, subtask.id, nextTitle);
@@ -7077,10 +7390,13 @@ function renderTaskSubtasks(title) {
       if (event.key === "Escape") {
         event.preventDefault();
         label.value = originalTitle;
+        resizeLabel();
         label.blur();
       }
     });
+    label.addEventListener("input", resizeLabel);
     label.addEventListener("blur", saveSubtaskTitle);
+    resizeLabel();
 
     const check = document.createElement("button");
     check.type = "button";
@@ -7096,8 +7412,49 @@ function renderTaskSubtasks(title) {
       renderStartupDashboard();
     });
 
+    const actions = document.createElement("div");
+    actions.className = "task-subtask-actions";
+
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "task-subtask-mini";
+    up.textContent = "↑";
+    up.setAttribute("aria-label", `move ${subtask.title} up`);
+    up.addEventListener("click", () => {
+      moveTaskSubtask(title, subtask.id, "up");
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    });
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.className = "task-subtask-mini";
+    down.textContent = "↓";
+    down.setAttribute("aria-label", `move ${subtask.title} down`);
+    down.addEventListener("click", () => {
+      moveTaskSubtask(title, subtask.id, "down");
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "task-subtask-mini";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `delete ${subtask.title}`);
+    remove.addEventListener("click", () => {
+      deleteTaskSubtask(title, subtask.id);
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    });
+
+    actions.appendChild(up);
+    actions.appendChild(down);
+    actions.appendChild(remove);
+    actions.appendChild(check);
+
     row.appendChild(label);
-    row.appendChild(check);
+    row.appendChild(actions);
     taskSubtaskList.appendChild(row);
   });
 }
@@ -7330,10 +7687,10 @@ function renderTaskWorkspace() {
     taskActionToggle.disabled = false;
   }
   if (taskActionSummary) {
-    taskActionSummary.textContent = [
+    taskActionSummary.textContent = getTaskActionFeedback(title, [
       workflowStatus === "active" ? "live" : state.blocker ? "blocked" : "ready",
       state.reminderAt || state.reminderCadence ? "follow-up on" : "follow-up off"
-    ].join(" · ");
+    ].join(" · "));
   }
   if (taskDoneToggle) {
     taskDoneToggle.disabled = false;
@@ -9256,6 +9613,7 @@ taskStartNowButton?.addEventListener("click", () => {
     return;
   }
   startTaskWorkSession(title, { minutes: 45 });
+  setTaskActionFeedback(title, "45 min sprint started");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9266,7 +9624,8 @@ taskFinishStepButton?.addEventListener("click", () => {
   if (!title) {
     return;
   }
-  completeNextOpenSubtask(title);
+  const result = completeNextOpenSubtask(title);
+  setTaskActionFeedback(title, result.changed ? `finished ${result.title}` : "no open step to finish");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9278,6 +9637,7 @@ taskPauseButton?.addEventListener("click", () => {
     return;
   }
   pauseTaskExecution(title);
+  setTaskActionFeedback(title, "task paused");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9289,6 +9649,7 @@ taskUnblockButton?.addEventListener("click", () => {
     return;
   }
   clearTaskBlocker(title);
+  setTaskActionFeedback(title, "blocker cleared");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9299,7 +9660,8 @@ taskPlanButton?.addEventListener("click", () => {
   if (!title) {
     return;
   }
-  buildLocalTaskExecutionPlan(title);
+  const added = buildLocalTaskExecutionPlan(title);
+  setTaskActionFeedback(title, added ? `added ${added} steps` : "plan already exists");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9315,6 +9677,7 @@ taskRemindLaterButton?.addEventListener("click", () => {
     return;
   }
   setTaskReminderState(title, parsed);
+  setTaskActionFeedback(title, "follow-up set for 2h");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9330,6 +9693,7 @@ taskTomorrowButton?.addEventListener("click", () => {
     return;
   }
   setTaskReminderState(title, parsed);
+  setTaskActionFeedback(title, "follow-up set for tomorrow");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9345,6 +9709,7 @@ taskDailyFollowupButton?.addEventListener("click", () => {
     return;
   }
   setTaskReminderState(title, parsed);
+  setTaskActionFeedback(title, "daily follow-up on");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
@@ -9356,6 +9721,7 @@ taskClearFollowupButton?.addEventListener("click", () => {
     return;
   }
   clearTaskReminderState(title);
+  setTaskActionFeedback(title, "follow-up cleared");
   setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
