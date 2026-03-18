@@ -6851,7 +6851,7 @@ function renderStartupDashboard() {
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "startup-empty";
-    empty.textContent = "no tasks yet. ask anna for a to do list and it’ll show up here.";
+    empty.textContent = "no tasks yet. ask anna for a to do list and it'll show up here.";
     startupTasksEl.appendChild(empty);
     return;
   }
@@ -8257,7 +8257,7 @@ async function loadVoicesIntoModal() {
     return;
   }
 
-  voiceStatus.textContent = "loading voices…";
+  voiceStatus.textContent = "loading voices...";
   voiceList.innerHTML = "";
 
   try {
