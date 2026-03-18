@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>task workspace</title>
+    <title>task</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,7 +15,7 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="app-frame" aria-label="task workspace">
+      <section class="app-frame" aria-label="task">
         <header class="topbar">
           <button class="icon-button" id="menuButton" aria-label="menu" type="button">
             <span></span>
@@ -60,7 +60,7 @@
           </div>
 
           <div class="task-helper-card task-operator-card">
-            <div class="task-related-title">task</div>
+            <div class="task-related-title">what to do next</div>
             <div class="task-operator-topline">
               <div class="task-workflow-badge" id="taskWorkflowBadge" data-status="queued">queued</div>
               <div class="task-progress-pill" id="taskProgressText">0%</div>
@@ -69,49 +69,49 @@
               <div class="task-progress-fill" id="taskProgressFill"></div>
             </div>
             <div class="task-operator-row">
-              <span class="task-operator-label">next move</span>
-              <span class="task-operator-value" id="taskNextActionText">pick a task to load the next move</span>
+              <span class="task-operator-label">next step</span>
+              <span class="task-operator-value" id="taskNextActionText">pick a task to see the next step</span>
             </div>
             <div class="task-operator-row">
-              <span class="task-operator-label">blocker</span>
+              <span class="task-operator-label">blocked by</span>
               <span class="task-operator-value" id="taskBlockerText">none</span>
             </div>
             <div class="task-operator-row">
-              <span class="task-operator-label">sprint</span>
-              <span class="task-operator-value" id="taskSessionText">not running</span>
+              <span class="task-operator-label">focus</span>
+              <span class="task-operator-value" id="taskSessionText">not active</span>
             </div>
             <div class="task-operator-row">
-              <span class="task-operator-label">follow up</span>
-              <span class="task-operator-value" id="taskReminderText">no follow-up set</span>
+              <span class="task-operator-label">reminder</span>
+              <span class="task-operator-value" id="taskReminderText">no reminder set</span>
             </div>
             <div class="task-operator-actions-compact">
-              <button class="glass-button primary" id="taskActionToggle" type="button" aria-expanded="false" aria-controls="taskActionMenu">actions</button>
-              <div class="task-operator-actions-summary" id="taskActionSummary">plan adds steps · follow-up sets reminders</div>
+              <button class="glass-button primary" id="taskActionToggle" type="button" aria-expanded="false" aria-controls="taskActionMenu">more</button>
+              <div class="task-operator-actions-summary" id="taskActionSummary">break it down · set a reminder</div>
             </div>
             <div class="task-operator-actions hidden" id="taskActionMenu">
-              <button class="glass-button primary" id="taskStartNowButton" type="button">start now</button>
-              <button class="glass-button" id="taskFinishStepButton" type="button">finish</button>
+              <button class="glass-button primary" id="taskStartNowButton" type="button">work now</button>
+              <button class="glass-button" id="taskFinishStepButton" type="button">finish step</button>
               <button class="glass-button" id="taskPauseButton" type="button">pause</button>
-              <button class="glass-button" id="taskUnblockButton" type="button">clear blocker</button>
-              <button class="glass-button" id="taskPlanButton" type="button">plan 3 steps</button>
-              <button class="glass-button" id="taskRemindLaterButton" type="button">follow up 2h</button>
-              <button class="glass-button" id="taskTomorrowButton" type="button">follow up tomorrow</button>
-              <button class="glass-button" id="taskDailyFollowupButton" type="button">follow up daily</button>
-              <button class="glass-button" id="taskClearFollowupButton" type="button">clear follow-up</button>
+              <button class="glass-button" id="taskUnblockButton" type="button">clear block</button>
+              <button class="glass-button" id="taskPlanButton" type="button">break into steps</button>
+              <button class="glass-button" id="taskRemindLaterButton" type="button">remind in 2h</button>
+              <button class="glass-button" id="taskTomorrowButton" type="button">remind tomorrow</button>
+              <button class="glass-button" id="taskDailyFollowupButton" type="button">daily reminder</button>
+              <button class="glass-button" id="taskClearFollowupButton" type="button">clear reminder</button>
             </div>
           </div>
 
           <label class="task-notes-card">
-            <span class="task-notes-label">working notes</span>
+            <span class="task-notes-label">notes</span>
             <textarea
               id="taskNotesInput"
               class="task-notes-input"
-              placeholder="drop notes, links, drafts, or next steps here"
+              placeholder="drop notes, links, drafts, or rough thinking here"
             ></textarea>
           </label>
 
           <div class="task-subtasks-card">
-            <div class="task-related-title">subtasks</div>
+            <div class="task-related-title">steps</div>
             <div class="task-subtask-composer">
               <input
                 id="taskSubtaskInput"
@@ -119,7 +119,7 @@
                 type="text"
                 inputmode="text"
                 autocomplete="off"
-                placeholder="add a smaller step"
+                placeholder="add the next step"
               />
               <button class="glass-button primary" id="taskSubtaskAdd" type="button">add</button>
             </div>
@@ -127,11 +127,11 @@
           </div>
 
           <div class="task-secondary-actions">
-            <a class="glass-button" id="taskBackLink" href="startup.html">back to startup</a>
+            <a class="glass-button" id="taskBackLink" href="startup.html">back</a>
           </div>
 
           <div class="task-related-card">
-            <div class="task-related-title">current startup list</div>
+            <div class="task-related-title">today's list</div>
             <div class="task-related-list" id="taskRelatedList"></div>
           </div>
         </section>

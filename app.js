@@ -7575,7 +7575,7 @@ function setTaskActionMenuOpen(isOpen) {
   }
   if (taskActionToggle) {
     taskActionToggle.setAttribute("aria-expanded", String(nextOpen));
-    taskActionToggle.textContent = nextOpen ? "hide actions" : "actions";
+    taskActionToggle.textContent = nextOpen ? "hide" : "more";
   }
 }
 
@@ -7609,16 +7609,16 @@ function renderTaskWorkspace() {
       taskProgressFill.style.width = "0%";
     }
     if (taskNextActionText) {
-      taskNextActionText.textContent = "pick a task to load the next move";
+      taskNextActionText.textContent = "pick a task to see the next step";
     }
     if (taskBlockerText) {
       taskBlockerText.textContent = "none";
     }
     if (taskSessionText) {
-      taskSessionText.textContent = "not running";
+      taskSessionText.textContent = "not active";
     }
     if (taskReminderText) {
-      taskReminderText.textContent = "no follow-up set";
+      taskReminderText.textContent = "no reminder set";
       taskReminderText.classList.remove("is-overdue");
     }
     if (taskFocusText) {
@@ -7669,8 +7669,8 @@ function renderTaskWorkspace() {
   const state = readTaskEntry(title);
   const completedSubtasks = state.subtasks.filter((item) => item.completed).length;
   const subtaskStatus = state.subtasks.length
-    ? `${completedSubtasks}/${state.subtasks.length} subtasks done`
-    : "no subtasks yet";
+    ? `${completedSubtasks}/${state.subtasks.length} steps done`
+    : "no steps yet";
   const workflowStatus = normalizeTaskWorkflowStatus(state.workflowStatus || (state.completed ? "done" : "queued"));
   const progress = getTaskProgressValue(state);
   const nextAction = getTaskNextActionText(state);
@@ -7794,8 +7794,8 @@ function renderTaskWorkspace() {
   }
   if (taskActionSummary) {
     taskActionSummary.textContent = getTaskActionFeedback(title, [
-      workflowStatus === "active" ? "live" : state.blocker ? "blocked" : "ready",
-      state.reminderAt || state.reminderCadence ? "follow-up on" : "follow-up off"
+      workflowStatus === "active" ? "in motion" : state.blocker ? "blocked" : "ready",
+      state.reminderAt || state.reminderCadence ? "reminder on" : "no reminder"
     ].join(" · "));
   }
   if (taskDoneToggle) {
