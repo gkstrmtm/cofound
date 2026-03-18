@@ -24,6 +24,8 @@ const startupBoardAlerts = document.getElementById("startupBoardAlerts");
 const startupFocusList = document.getElementById("startupFocusList");
 const startupTodayPlanSummary = document.getElementById("startupTodayPlanSummary");
 const startupTodayPlanList = document.getElementById("startupTodayPlanList");
+const startupTomorrowPlanSummary = document.getElementById("startupTomorrowPlanSummary");
+const startupTomorrowPlanList = document.getElementById("startupTomorrowPlanList");
 const startupStandupSummary = document.getElementById("startupStandupSummary");
 const startupTimelineList = document.getElementById("startupTimelineList");
 const startupTasksEl = document.getElementById("startupTasks");
@@ -1484,6 +1486,7 @@ function maybeHandleLocalVoiceCommand(text) {
     return overdue.length ? `overdue follow-ups: ${overdue.join("; ")}.` : "nothing is overdue right now.";
   };
   const getTodayPlanCommandReply = () => buildTodayPlanReply();
+  const getTomorrowPlanCommandReply = () => buildTomorrowPlanReply();
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1923,6 +1926,24 @@ function maybeHandleLocalVoiceCommand(text) {
     };
   }
 
+  if (/(?:build|make|create|rebuild|auto(?:\s|-)?plan)\s+(?:my\s+)?tomorrow(?:'s)?\s+plan/.test(normalized) || /(?:plan out|slot out)\s+tomorrow/.test(normalized)) {
+    const result = buildAutoTomorrowPlan();
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `${result.summary}${result.scheduled.length ? ` ${result.scheduled.slice(0, 4).join("; ")}.` : ""}`.trim()
+    };
+  }
+
+  if (/(?:roll over|carry over|move)\s+(?:today|today's work|today's plan)\s+(?:to|into)?\s*tomorrow/.test(normalized) || /(?:roll|carry)\s+this\s+into\s+tomorrow/.test(normalized)) {
+    const result = rollOverTodayToTomorrow();
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: result.summary
+    };
+  }
+
   if (/(?:clear|remove|delete|reset)\s+(?:my\s+)?(?:auto|generated)\s+today(?:'s)?\s+plan/.test(normalized) || /(?:clear|reset)\s+auto(?:\s|-)?plan/.test(normalized)) {
     const cleared = clearAutoTodayPlan();
     refreshTaskViews();
@@ -1936,6 +1957,13 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: getTodayPlanCommandReply()
+    };
+  }
+
+  if (/(?:what(?:'s| is) on tomorrow(?:'s)? plan|show me tomorrow(?:'s)? plan|what(?:'s| is) tomorrow looking like|tomorrow(?:'s)? plan)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getTomorrowPlanCommandReply()
     };
   }
 
@@ -3418,18 +3446,28 @@ function getRoundedQuarterTimestamp(timestamp = Date.now()) {
   return next.getTime();
 }
 
-function getTodayPlanningWindow(nowTs = Date.now()) {
-  const todayStart = getTodayStartTimestamp();
-  const now = new Date(nowTs);
-  const dayStart = new Date(todayStart);
+function getDayStartTimestamp(offsetDays = 0) {
+  const now = new Date();
+  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  day.setDate(day.getDate() + Number(offsetDays || 0));
+  return day.getTime();
+}
+
+function getTodayPlanningWindow(dayOffset = 0, nowTs = Date.now()) {
+  const dayStartTs = getDayStartTimestamp(dayOffset);
+  const dayStart = new Date(dayStartTs);
   dayStart.setHours(10, 0, 0, 0);
-  const dayEnd = new Date(todayStart);
+  const dayEnd = new Date(dayStartTs);
   dayEnd.setHours(18, 30, 0, 0);
-  const start = Math.max(dayStart.getTime(), getRoundedQuarterTimestamp(now.getTime() + 10 * 60 * 1000));
+  const isToday = dayOffset === 0;
+  const start = isToday
+    ? Math.max(dayStart.getTime(), getRoundedQuarterTimestamp(nowTs + 10 * 60 * 1000))
+    : dayStart.getTime();
   return {
     start,
     end: dayEnd.getTime(),
-    todayStart
+    dayStart: dayStartTs,
+    dayEnd: dayStartTs + 86400000
   };
 }
 
@@ -3453,13 +3491,15 @@ function getNextOpenPlanningSlot(cursorTs, durationMinutes, reservedBlocks, plan
   return 0;
 }
 
-function buildAutoTodayPlan(userId = getCurrentUserId()) {
+function buildAutoPlanForOffset(dayOffset = 0, userId = getCurrentUserId(), applyChanges = true) {
   const now = Date.now();
-  const { start, end, todayStart } = getTodayPlanningWindow(now);
+  const { start, end, dayStart, dayEnd } = getTodayPlanningWindow(dayOffset, now);
+  const dayName = dayOffset === 0 ? "today" : dayOffset === 1 ? "tomorrow" : "that day";
   if (start >= end) {
     return {
       changed: false,
-      summary: "today is basically closed out — tomorrow needs the next rebuild.",
+      summary: `${dayName} is basically closed out — plan the next day instead.`,
+      slots: [],
       scheduled: [],
       preserved: [],
       carryOver: []
@@ -3471,19 +3511,31 @@ function buildAutoTodayPlan(userId = getCurrentUserId()) {
   const preserved = [];
   const autoCandidates = [];
   const carryOver = [];
+  const existingDaySlots = [];
 
   entries.forEach((entry) => {
     const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
     const source = normalizeTaskScheduleSource(entry?.scheduledSource);
     const duration = estimateTaskScheduleDuration(entry);
-    const isToday = Boolean(scheduledAt && scheduledAt >= todayStart && scheduledAt < todayStart + 86400000);
+    const isTargetDay = Boolean(scheduledAt && scheduledAt >= dayStart && scheduledAt < dayEnd);
     const isReady = !getTaskDependencyState(entry, userId).blocking.length && normalizeTaskWorkflowStatus(entry?.workflowStatus) !== "blocked";
 
-    if (scheduledAt && scheduledAt < todayStart) {
+    if (scheduledAt && scheduledAt < dayStart) {
       carryOver.push(entry.title);
     }
 
-    if (isToday && source === "manual") {
+    if (isTargetDay) {
+      existingDaySlots.push({
+        title: entry.title,
+        scheduledAt,
+        scheduledLabel: entry.scheduledLabel || formatTaskDueLabel(scheduledAt, ""),
+        scheduledSource: source || "manual",
+        scheduledDurationMinutes: duration,
+        existing: true
+      });
+    }
+
+    if (isTargetDay && source === "manual") {
       manualBlocks.push({
         title: entry.title,
         start: scheduledAt,
@@ -3502,7 +3554,9 @@ function buildAutoTodayPlan(userId = getCurrentUserId()) {
     }
   });
 
+  const existingTitles = new Set(existingDaySlots.map((item) => item.title));
   const sortedCandidates = autoCandidates
+    .filter((entry) => !existingTitles.has(entry.title) || normalizeTaskScheduleSource(entry.scheduledSource) === "auto")
     .sort((a, b) => {
       const rankDiff = getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId);
       if (rankDiff) {
@@ -3530,11 +3584,20 @@ function buildAutoTodayPlan(userId = getCurrentUserId()) {
       title: entry.title,
       scheduledAt: slotStart,
       scheduledLabel: formatTaskDueLabel(slotStart, ""),
-      scheduledSource: "auto",
-      scheduledDurationMinutes: duration
+      scheduledSource: applyChanges ? "auto" : "suggested",
+      scheduledDurationMinutes: duration,
+      existing: false
     };
 
-    setTaskPlanningState(entry.title, slot, userId);
+    if (applyChanges) {
+      setTaskPlanningState(entry.title, {
+        scheduledAt: slot.scheduledAt,
+        scheduledLabel: slot.scheduledLabel,
+        scheduledSource: "auto",
+        scheduledDurationMinutes: slot.scheduledDurationMinutes
+      }, userId);
+    }
+
     reservedBlocks.push({
       title: entry.title,
       start: slotStart,
@@ -3544,46 +3607,145 @@ function buildAutoTodayPlan(userId = getCurrentUserId()) {
     cursor = slotStart + duration * 60 * 1000 + 15 * 60 * 1000;
   });
 
-  entries.forEach((entry) => {
-    const source = normalizeTaskScheduleSource(entry?.scheduledSource);
-    const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
-    const isToday = Boolean(scheduledAt && scheduledAt >= todayStart && scheduledAt < todayStart + 86400000);
-    const wasAutoScheduledToday = isToday && source === "auto";
-    const stillScheduled = scheduled.some((item) => item.title === entry.title);
-    if (wasAutoScheduledToday && !stillScheduled) {
-      setTaskPlanningState(entry.title, {
-        scheduledAt: 0,
-        scheduledLabel: "",
-        scheduledSource: "",
-        scheduledDurationMinutes: 0
-      }, userId);
-    }
-  });
+  if (applyChanges) {
+    entries.forEach((entry) => {
+      const source = normalizeTaskScheduleSource(entry?.scheduledSource);
+      const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+      const isTargetDay = Boolean(scheduledAt && scheduledAt >= dayStart && scheduledAt < dayEnd);
+      const wasAutoScheduled = isTargetDay && source === "auto";
+      const stillScheduled = scheduled.some((item) => item.title === entry.title);
+      if (wasAutoScheduled && !stillScheduled) {
+        setTaskPlanningState(entry.title, {
+          scheduledAt: 0,
+          scheduledLabel: "",
+          scheduledSource: "",
+          scheduledDurationMinutes: 0
+        }, userId);
+      }
+    });
+  }
 
+  const allSlots = [...existingDaySlots.filter((item) => item.scheduledSource === "manual"), ...scheduled]
+    .sort((a, b) => a.scheduledAt - b.scheduledAt);
   const summary = scheduled.length
-    ? `rebuilt today’s plan with ${scheduled.length} auto slot${scheduled.length === 1 ? "" : "s"}${preserved.length ? ` and kept ${preserved.length} manual` : ""}.`
+    ? `rebuilt ${dayName}'s plan with ${scheduled.length} ${applyChanges ? "auto" : "suggested"} slot${scheduled.length === 1 ? "" : "s"}${preserved.length ? ` and kept ${preserved.length} manual` : ""}.`
     : preserved.length
-      ? `kept ${preserved.length} manual plan slot${preserved.length === 1 ? "" : "s"}; no additional ready tasks fit today.`
-      : "no ready tasks were available to auto-plan today.";
+      ? `kept ${preserved.length} manual plan slot${preserved.length === 1 ? "" : "s"}; no additional ready tasks fit ${dayName}.`
+      : `no ready tasks were available to plan for ${dayName}.`;
 
   return {
     changed: Boolean(scheduled.length),
     summary,
+    slots: allSlots,
     scheduled: scheduled.map((item) => `${item.title} at ${formatTaskScheduleLabel(item.scheduledAt, item.scheduledLabel)}`),
     preserved,
-    carryOver: carryOver.slice(0, 3)
+    carryOver: carryOver.slice(0, 4)
   };
 }
 
-function clearAutoTodayPlan(userId = getCurrentUserId()) {
-  const todayStart = getTodayStartTimestamp();
+function buildAutoTodayPlan(userId = getCurrentUserId()) {
+  return buildAutoPlanForOffset(0, userId, true);
+}
+
+function buildAutoTomorrowPlan(userId = getCurrentUserId()) {
+  return buildAutoPlanForOffset(1, userId, true);
+}
+
+function getTomorrowPlanData(userId = getCurrentUserId()) {
+  const preview = buildAutoPlanForOffset(1, userId, false);
+  const planned = preview.slots.map((item) => ({
+    title: item.title,
+    time: formatTaskScheduleLabel(item.scheduledAt, item.scheduledLabel),
+    bucket: getTaskScheduleBucket({ scheduledAt: item.scheduledAt }),
+    next: getTaskNextActionText(readTaskEntry(item.title, userId)),
+    milestone: normalizeTaskMilestone(readTaskEntry(item.title, userId).milestone),
+    source: item.scheduledSource,
+    durationMinutes: item.scheduledDurationMinutes,
+    meta: buildTaskExecutionParts(readTaskEntry(item.title, userId)).filter((part) => !part.startsWith("next ")).slice(0, 2)
+  }));
+
+  const summary = planned.length
+    ? `tomorrow starts with ${planned.length} slot${planned.length === 1 ? "" : "s"}${preview.carryOver.length ? ` · ${preview.carryOver.length} carryover` : ""}.`
+    : preview.carryOver.length
+      ? `tomorrow needs a reset — ${preview.carryOver.length} carryover task${preview.carryOver.length === 1 ? "" : "s"} are waiting.`
+      : "tomorrow is open — build a first-pass plan before you log off.";
+
+  return {
+    summary,
+    planned,
+    carryOver: preview.carryOver,
+    preserved: preview.preserved
+  };
+}
+
+function buildTomorrowPlanReply(userId = getCurrentUserId()) {
+  const tomorrowPlan = getTomorrowPlanData(userId);
+  if (!tomorrowPlan.planned.length) {
+    return tomorrowPlan.summary;
+  }
+  const lines = tomorrowPlan.planned
+    .slice(0, 5)
+    .map((item) => `${item.time}: ${item.title} → ${item.next}`)
+    .join("; ");
+  const carryText = tomorrowPlan.carryOver.length ? ` Carryover: ${tomorrowPlan.carryOver.join(", ")}.` : "";
+  return `${tomorrowPlan.summary} ${lines}.${carryText}`.trim();
+}
+
+function rollOverTodayToTomorrow(userId = getCurrentUserId()) {
+  const todayPlan = getTodayPlanData(userId);
+  const tomorrowWindow = getTodayPlanningWindow(1, Date.now());
+  const tomorrowEntries = getTaskEntriesForUser(userId)
+    .filter((entry) => !entry.completed)
+    .filter((entry) => {
+      const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
+      return scheduledAt >= tomorrowWindow.dayStart && scheduledAt < tomorrowWindow.dayEnd && normalizeTaskScheduleSource(entry.scheduledSource) === "manual";
+    })
+    .map((entry) => ({
+      start: Number(entry.scheduledAt || 0) || 0,
+      end: (Number(entry.scheduledAt || 0) || 0) + estimateTaskScheduleDuration(entry) * 60 * 1000
+    }));
+
+  let cursor = tomorrowWindow.start;
+  let moved = 0;
+  todayPlan.planned.forEach((item) => {
+    const state = readTaskEntry(item.title, userId);
+    const duration = estimateTaskScheduleDuration(state);
+    const slotStart = getNextOpenPlanningSlot(cursor, duration, tomorrowEntries, tomorrowWindow.end);
+    if (!slotStart) {
+      return;
+    }
+    const source = normalizeTaskScheduleSource(state.scheduledSource) || "auto";
+    setTaskPlanningState(item.title, {
+      scheduledAt: slotStart,
+      scheduledLabel: formatTaskDueLabel(slotStart, ""),
+      scheduledSource: source,
+      scheduledDurationMinutes: duration
+    }, userId);
+    tomorrowEntries.push({
+      start: slotStart,
+      end: slotStart + duration * 60 * 1000
+    });
+    cursor = slotStart + duration * 60 * 1000 + 15 * 60 * 1000;
+    moved += 1;
+  });
+
+  return {
+    moved,
+    summary: moved
+      ? `rolled ${moved} unfinished task${moved === 1 ? "" : "s"} into tomorrow's first pass.`
+      : "nothing from today needed to roll into tomorrow."
+  };
+}
+
+function clearAutoTodayPlan(userId = getCurrentUserId(), dayOffset = 0) {
+  const dayStart = getDayStartTimestamp(dayOffset);
   const entries = getTaskEntriesForUser(userId).filter((entry) => entry?.title && !entry.completed);
   let cleared = 0;
 
   entries.forEach((entry) => {
     const scheduledAt = Number(entry?.scheduledAt || 0) || 0;
     const source = normalizeTaskScheduleSource(entry?.scheduledSource);
-    if (source === "auto" && scheduledAt >= todayStart && scheduledAt < todayStart + 86400000) {
+    if (source === "auto" && scheduledAt >= dayStart && scheduledAt < dayStart + 86400000) {
       setTaskPlanningState(entry.title, {
         scheduledAt: 0,
         scheduledLabel: "",
@@ -4532,6 +4694,7 @@ function buildMessagesForApi() {
   const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
   const dailyBriefingSummary = buildDailyBriefingReply(currentUserId);
   const todayPlanSummary = buildTodayPlanReply(currentUserId);
+  const tomorrowPlanSummary = buildTomorrowPlanReply(currentUserId);
   const standupSummary = buildBoardStandupReply(currentUserId);
   const timelineSummary = getBoardTimelineData(currentUserId, 4).map((item) => `- ${item.title} · ${item.kind} · ${formatRelativeTime(Date.now() - item.ts)} · ${item.detail}`).join("\n");
   const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
@@ -4602,6 +4765,9 @@ function buildMessagesForApi() {
   }
   if (todayPlanSummary) {
     sysParts.push(`today plan: ${todayPlanSummary}`);
+  }
+  if (tomorrowPlanSummary) {
+    sysParts.push(`tomorrow plan: ${tomorrowPlanSummary}`);
   }
   if (standupSummary) {
     sysParts.push(`daily standup: ${standupSummary}`);
@@ -4997,7 +5163,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupStandupSummary && !startupTodayPlanSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary) {
     return;
   }
 
@@ -5007,6 +5173,7 @@ function renderStartupDashboard() {
   const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
   const briefing = getDailyBriefingData(userId);
   const todayPlan = getTodayPlanData(userId);
+  const tomorrowPlan = getTomorrowPlanData(userId);
   const standup = getBoardStandupData(userId);
   const timeline = getBoardTimelineData(userId, 6);
 
@@ -5112,6 +5279,58 @@ function renderStartupDashboard() {
         row.appendChild(timeEl);
         row.appendChild(mainEl);
         startupTodayPlanList.appendChild(row);
+      });
+    }
+  }
+  if (startupTomorrowPlanSummary) {
+    startupTomorrowPlanSummary.textContent = tomorrowPlan.summary;
+  }
+  if (startupTomorrowPlanList) {
+    startupTomorrowPlanList.innerHTML = "";
+    if (!tomorrowPlan.planned.length) {
+      const empty = document.createElement("div");
+      empty.className = "startup-plan-item is-empty";
+      empty.textContent = tomorrowPlan.carryOver.length
+        ? `carryover waiting: ${tomorrowPlan.carryOver.join(" · ")}`
+        : "tomorrow is open — ask anna to build tomorrow's plan before you log off.";
+      startupTomorrowPlanList.appendChild(empty);
+    } else {
+      tomorrowPlan.planned.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "startup-plan-item";
+
+        const timeEl = document.createElement("div");
+        timeEl.className = "startup-plan-time";
+        timeEl.textContent = item.time;
+
+        const mainEl = document.createElement("div");
+        mainEl.className = "startup-plan-main";
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "startup-plan-title";
+        titleEl.textContent = item.title;
+
+        const metaParts = [
+          item.bucket,
+          item.source ? `${item.source} slot` : "",
+          item.durationMinutes ? `${item.durationMinutes} min` : "",
+          item.milestone ? `milestone ${item.milestone}` : "",
+          item.next ? `next ${item.next}` : "",
+          ...item.meta
+        ].filter(Boolean).slice(0, 3);
+
+        mainEl.appendChild(titleEl);
+
+        if (metaParts.length) {
+          const metaEl = document.createElement("div");
+          metaEl.className = "startup-plan-meta";
+          metaEl.textContent = metaParts.join(" · ");
+          mainEl.appendChild(metaEl);
+        }
+
+        row.appendChild(timeEl);
+        row.appendChild(mainEl);
+        startupTomorrowPlanList.appendChild(row);
       });
     }
   }
