@@ -1160,9 +1160,9 @@ button {
 }
 
 .task-subtask-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.42rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex: 0 0 auto;
 }
 
@@ -1240,6 +1240,17 @@ button {
   gap: 0.7rem;
 }
 
+.task-subtask-item.is-dragging,
+.task-related-item.is-dragging {
+  opacity: 0.55;
+}
+
+.task-subtask-item.is-drag-target,
+.task-related-item.is-drag-target {
+  border-color: rgba(245, 158, 11, 0.68);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.24);
+}
+
 .startup-ops-title {
   color: var(--olive-deep);
   font-weight: 800;
@@ -1250,6 +1261,31 @@ button {
   font-size: 0.76rem;
   font-weight: 800;
   letter-spacing: 0.02em;
+}
+
+.task-drag-handle {
+  border: none;
+  background: rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.52);
+  border-radius: 12px;
+  min-width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  font-size: 0.98rem;
+  letter-spacing: -0.08em;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+.task-drag-handle:hover,
+.task-drag-handle:focus-visible {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+.task-drag-handle:active {
+  cursor: grabbing;
+  transform: scale(0.97);
 }
 
 .startup-ops-copy {
@@ -1279,7 +1315,7 @@ button {
 .task-related-actions {
   display: flex;
   align-items: center;
-  gap: 0.42rem;
+  gap: 10px;
 }
 
 .task-related-item.is-active .task-related-link {
