@@ -52,39 +52,15 @@
         </aside>
 
         <section class="task-stage" id="taskStage" aria-live="polite">
-          <div class="task-title-row">
-            <h1 class="task-page-title" id="taskPageTitle">task</h1>
-            <button class="glass-button" id="taskTitleEditButton" type="button">edit</button>
-          </div>
-
-          <div class="task-title-editor hidden" id="taskTitleEditor">
-            <input
-              id="taskTitleInput"
-              class="task-title-input"
-              type="text"
-              inputmode="text"
-              autocomplete="off"
-              placeholder="rename task"
-            />
-            <button class="glass-button primary" id="taskTitleSaveButton" type="button">save</button>
-            <button class="glass-button" id="taskTitleCancelButton" type="button">cancel</button>
-          </div>
+          <h1 class="task-page-title" id="taskPageTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="task title">task</h1>
 
           <div class="task-toolbar">
             <button class="task-check-toggle" id="taskDoneToggle" type="button">mark done</button>
             <div class="task-page-status" id="taskPageStatus">in progress</div>
           </div>
 
-          <div class="task-helper-card task-owner-card">
-            <div class="task-related-title">owner mode</div>
-            <div class="task-owner-summary" id="taskOwnerSummary">
-              give anna a real operating target like “work on this today”, “done by 5”, or “make this top priority.”
-            </div>
-            <div class="task-owner-chips" id="taskOwnerChips"></div>
-          </div>
-
           <div class="task-helper-card task-operator-card">
-            <div class="task-related-title">operator console</div>
+            <div class="task-related-title">task</div>
             <div class="task-operator-topline">
               <div class="task-workflow-badge" id="taskWorkflowBadge" data-status="queued">queued</div>
               <div class="task-progress-pill" id="taskProgressText">0%</div>
@@ -110,7 +86,7 @@
             </div>
             <div class="task-operator-actions-compact">
               <button class="glass-button primary" id="taskActionToggle" type="button" aria-expanded="false" aria-controls="taskActionMenu">actions</button>
-              <div class="task-operator-actions-summary" id="taskActionSummary">tap for actions</div>
+              <div class="task-operator-actions-summary" id="taskActionSummary">ready · follow-up off</div>
             </div>
             <div class="task-operator-actions hidden" id="taskActionMenu">
               <button class="glass-button primary" id="taskStartNowButton" type="button">start now</button>
@@ -123,23 +99,6 @@
               <button class="glass-button" id="taskDailyFollowupButton" type="button">daily follow-up</button>
               <button class="glass-button" id="taskClearFollowupButton" type="button">clear follow-up</button>
             </div>
-          </div>
-
-          <div class="task-helper-card task-operator-card">
-            <div class="task-related-title">operator stack</div>
-            <div class="task-operator-row">
-              <span class="task-operator-label">focus mode</span>
-              <span class="task-operator-value" id="taskFocusText">not running</span>
-            </div>
-            <div class="task-operator-row">
-              <span class="task-operator-label">rescue</span>
-              <span class="task-operator-value" id="taskRescueText">no rescue plan yet</span>
-            </div>
-            <div class="task-operator-row">
-              <span class="task-operator-label">meeting mode</span>
-              <span class="task-operator-value" id="taskMeetingText">off</span>
-            </div>
-            <div class="task-decision-list" id="taskDecisionList"></div>
           </div>
 
           <label class="task-notes-card">

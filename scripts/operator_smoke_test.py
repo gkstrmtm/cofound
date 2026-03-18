@@ -245,18 +245,19 @@ def main():
         task_state = page.evaluate(
             """
             () => ({
-              focusText: document.getElementById('taskFocusText')?.textContent || '',
-              rescueText: document.getElementById('taskRescueText')?.textContent || '',
-              meetingText: document.getElementById('taskMeetingText')?.textContent || '',
-              decisionItems: Array.from(document.querySelectorAll('#taskDecisionList .task-decision-copy')).map((el) => el.textContent || ''),
+              titleText: document.getElementById('taskPageTitle')?.textContent || '',
+              titleEditable: document.getElementById('taskPageTitle')?.getAttribute('contenteditable') || '',
+              nextMove: document.getElementById('taskNextActionText')?.textContent || '',
+              actionSummary: document.getElementById('taskActionSummary')?.textContent || '',
               workflow: document.getElementById('taskWorkflowBadge')?.textContent || ''
             })
             """
         )
-        assert_true(bool(task_state['focusText']), 'task focus text missing')
-        assert_true(bool(task_state['rescueText']), 'task rescue text missing')
-        assert_true('live' in task_state['meetingText'], 'task meeting mode indicator missing')
-        assert_true(any('self serve onboarding' in item for item in task_state['decisionItems']), 'task decision list did not render')
+        assert_true(task_state['titleText'] == 'launch email', 'task title did not render')
+        assert_true(task_state['titleEditable'] == 'true', 'task title is not editable in place')
+        assert_true(bool(task_state['nextMove']), 'task next move missing')
+        assert_true(bool(task_state['actionSummary']), 'task action summary missing')
+        assert_true(bool(task_state['workflow']), 'task workflow badge missing')
 
         serious_console = [msg for msg in console_issues if 'favicon' not in msg.lower() and '401' not in msg.lower()]
         assert_true(not page_errors, 'page errors: ' + ' | '.join(page_errors))

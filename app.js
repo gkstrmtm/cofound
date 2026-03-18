@@ -77,11 +77,6 @@ const taskActionToggle = document.getElementById("taskActionToggle");
 const taskActionMenu = document.getElementById("taskActionMenu");
 const taskActionSummary = document.getElementById("taskActionSummary");
 const taskDoneToggle = document.getElementById("taskDoneToggle");
-const taskTitleEditButton = document.getElementById("taskTitleEditButton");
-const taskTitleEditor = document.getElementById("taskTitleEditor");
-const taskTitleInput = document.getElementById("taskTitleInput");
-const taskTitleSaveButton = document.getElementById("taskTitleSaveButton");
-const taskTitleCancelButton = document.getElementById("taskTitleCancelButton");
 const taskNotesInput = document.getElementById("taskNotesInput");
 const taskTalkButton = document.getElementById("taskTalkButton");
 const voiceTriggerButton = document.getElementById("voiceTriggerButton");
@@ -6539,36 +6534,20 @@ function renderStartupDashboard() {
   const decisions = readDecisionLog(userId).slice(0, 4);
   const operatorState = readOperatorState(userId);
 
-  const pulseSummary = briefing.focus.length
-    ? `${briefing.focus.length} move${briefing.focus.length === 1 ? "" : "s"}`
-    : `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}`;
+  const pulseSummary = String(briefing.focus.length);
   const plansTodayCount = todayPlan.planned.length || todayPlan.carryOver.length;
-  const plansSummary = `${plansTodayCount} today`;
-  const healthSummary = riskRadar.risky.length
-    ? `${riskRadar.risky.length} risk${riskRadar.risky.length === 1 ? "" : "s"}`
-    : `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}`;
-  const operatorSummary = operatorState.focusTaskTitle
-    ? "focus live"
-    : operatorState.meetingActive
-      ? "meeting live"
-      : `${roadmap.length} live`;
+  const plansSummary = String(plansTodayCount);
+  const healthSummary = String(riskRadar.risky.length);
+  const operatorSummary = String(roadmap.length);
 
-  const pulseMetaParts = [
-    `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}`,
-    `${briefing.focus.length} move${briefing.focus.length === 1 ? "" : "s"}`
-  ];
-  const plansMetaParts = [
-    `today ${plansTodayCount}`,
-    `tomorrow ${tomorrowPlan.planned.length}`
-  ];
-  const healthMetaParts = [
-    `risks ${riskRadar.risky.length}`,
-    `milestones ${milestoneStatus.rollups.length}`
-  ];
-  const operatorMetaParts = [
-    `systems ${roadmap.length}`,
-    `decisions ${decisions.length}`
-  ];
+  const pulseMeta = briefing.alerts.length
+    ? `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}`
+    : "board calm";
+  const plansMeta = `tomorrow ${tomorrowPlan.planned.length}`;
+  const healthMeta = `milestones ${milestoneStatus.rollups.length}`;
+  const operatorMeta = decisions.length
+    ? `${decisions.length} decision${decisions.length === 1 ? "" : "s"}`
+    : "no decisions";
 
   if (projectsLeftEl) {
     projectsLeftEl.textContent = String(remainingCount);
@@ -6585,25 +6564,25 @@ function renderStartupDashboard() {
     startupPulseSummary.textContent = pulseSummary;
   }
   if (startupPulseMeta) {
-    startupPulseMeta.textContent = pulseMetaParts.join(" · ");
+    startupPulseMeta.textContent = pulseMeta;
   }
   if (startupPlansSummary) {
     startupPlansSummary.textContent = plansSummary;
   }
   if (startupPlansMeta) {
-    startupPlansMeta.textContent = plansMetaParts.join(" · ");
+    startupPlansMeta.textContent = plansMeta;
   }
   if (startupHealthSummary) {
     startupHealthSummary.textContent = healthSummary;
   }
   if (startupHealthMeta) {
-    startupHealthMeta.textContent = healthMetaParts.join(" · ");
+    startupHealthMeta.textContent = healthMeta;
   }
   if (startupOperatorSummary) {
     startupOperatorSummary.textContent = operatorSummary;
   }
   if (startupOperatorMeta) {
-    startupOperatorMeta.textContent = operatorMetaParts.join(" · ");
+    startupOperatorMeta.textContent = operatorMeta;
   }
 
   if (startupBriefingSummary) {
@@ -7070,9 +7049,38 @@ function renderTaskSubtasks(title) {
     const row = document.createElement("div");
     row.className = `task-subtask-item${subtask.completed ? " is-complete" : ""}`;
 
-    const label = document.createElement("div");
+    const label = document.createElement("input");
+    label.type = "text";
+    label.spellcheck = false;
     label.className = "task-subtask-title";
-    label.textContent = subtask.title;
+    label.value = subtask.title;
+    label.setAttribute("aria-label", "subtask title");
+    const originalTitle = subtask.title;
+    const saveSubtaskTitle = () => {
+      const nextTitle = String(label.value || "").trim();
+      if (!nextTitle) {
+        label.value = originalTitle;
+        return;
+      }
+      if (nextTitle === originalTitle) {
+        return;
+      }
+      renameTaskSubtask(title, subtask.id, nextTitle);
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    };
+    label.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        label.blur();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        label.value = originalTitle;
+        label.blur();
+      }
+    });
+    label.addEventListener("blur", saveSubtaskTitle);
 
     const check = document.createElement("button");
     check.type = "button";
@@ -7088,34 +7096,13 @@ function renderTaskSubtasks(title) {
       renderStartupDashboard();
     });
 
-    const actions = document.createElement("div");
-    actions.className = "task-subtask-actions";
-
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "task-subtask-edit";
-    edit.textContent = "edit";
-    edit.addEventListener("click", () => {
-      const nextTitle = window.prompt("rename subtask", subtask.title);
-      if (nextTitle == null) {
-        return;
-      }
-      renameTaskSubtask(title, subtask.id, nextTitle);
-      renderTaskWorkspace();
-      renderStartupDashboard();
-    });
-
-    actions.appendChild(edit);
-    actions.appendChild(check);
-
     row.appendChild(label);
-    row.appendChild(actions);
+    row.appendChild(check);
     taskSubtaskList.appendChild(row);
   });
 }
 
 let isTaskActionMenuOpen = false;
-let isTaskTitleEditorOpen = false;
 
 function setTaskActionMenuOpen(isOpen) {
   const nextOpen = Boolean(isOpen);
@@ -7126,21 +7113,6 @@ function setTaskActionMenuOpen(isOpen) {
   if (taskActionToggle) {
     taskActionToggle.setAttribute("aria-expanded", String(nextOpen));
     taskActionToggle.textContent = nextOpen ? "hide actions" : "actions";
-  }
-}
-
-function setTaskTitleEditorOpen(isOpen) {
-  const nextOpen = Boolean(isOpen);
-  isTaskTitleEditorOpen = nextOpen;
-  if (taskTitleEditor) {
-    taskTitleEditor.classList.toggle("hidden", !nextOpen);
-  }
-  if (taskTitleInput && nextOpen) {
-    taskTitleInput.value = getCurrentTaskTitle() || "";
-    window.setTimeout(() => {
-      taskTitleInput.focus();
-      taskTitleInput.select();
-    }, 0);
   }
 }
 
@@ -7207,11 +7179,7 @@ function renderTaskWorkspace() {
     if (taskActionSummary) {
       taskActionSummary.textContent = "pick a task to unlock actions";
     }
-    if (taskTitleEditButton) {
-      taskTitleEditButton.disabled = true;
-    }
     setTaskActionMenuOpen(false);
-    setTaskTitleEditorOpen(false);
     if (taskNotesInput) {
       taskNotesInput.value = "";
       taskNotesInput.disabled = true;
@@ -7247,14 +7215,8 @@ function renderTaskWorkspace() {
   const rescue = buildDependencyRescueData(title);
   const decisions = readDecisionLog().filter((item) => !item.taskTitle || item.taskTitle === title).slice(0, 3);
 
-  if (taskPageTitle) {
+  if (taskPageTitle && document.activeElement !== taskPageTitle) {
     taskPageTitle.textContent = title;
-  }
-  if (taskTitleInput && document.activeElement !== taskTitleInput) {
-    taskTitleInput.value = title;
-  }
-  if (taskTitleEditButton) {
-    taskTitleEditButton.disabled = false;
   }
   if (taskPageStatus) {
     taskPageStatus.textContent = `${formatTaskWorkflowLabel(workflowStatus)} · ${subtaskStatus}`;
@@ -9236,38 +9198,49 @@ taskActionToggle?.addEventListener("click", () => {
   setTaskActionMenuOpen(!isTaskActionMenuOpen);
 });
 
-taskTitleEditButton?.addEventListener("click", () => {
-  setTaskTitleEditorOpen(!isTaskTitleEditorOpen);
-});
+let taskTitleEditOriginal = "";
 
-function saveCurrentTaskTitle() {
+function saveInlineTaskTitle() {
   const title = getCurrentTaskTitle();
-  const nextTitle = String(taskTitleInput?.value || "").trim();
-  if (!title || !nextTitle) {
+  const nextTitle = String(taskPageTitle?.textContent || "").trim();
+  if (!title || !taskPageTitle) {
+    return;
+  }
+  if (!nextTitle) {
+    taskPageTitle.textContent = title;
+    return;
+  }
+  if (normalizeTaskTitle(nextTitle) === title) {
+    taskPageTitle.textContent = title;
     return;
   }
   const result = renameTask(title, nextTitle);
   if (result.reason === "exists") {
     window.alert("that task name already exists.");
+    taskPageTitle.textContent = title;
     return;
   }
   renderStartupDashboard();
   renderTaskWorkspace();
-  setTaskTitleEditorOpen(false);
 }
 
-taskTitleSaveButton?.addEventListener("click", saveCurrentTaskTitle);
-taskTitleCancelButton?.addEventListener("click", () => setTaskTitleEditorOpen(false));
-taskTitleInput?.addEventListener("keydown", (event) => {
+taskPageTitle?.addEventListener("focus", () => {
+  taskTitleEditOriginal = getCurrentTaskTitle() || String(taskPageTitle.textContent || "").trim();
+});
+
+taskPageTitle?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
-    saveCurrentTaskTitle();
+    taskPageTitle.blur();
   }
   if (event.key === "Escape") {
     event.preventDefault();
-    setTaskTitleEditorOpen(false);
+    taskPageTitle.textContent = taskTitleEditOriginal || getCurrentTaskTitle() || "";
+    taskPageTitle.blur();
   }
 });
+
+taskPageTitle?.addEventListener("blur", saveInlineTaskTitle);
 
 taskSubtaskInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {
