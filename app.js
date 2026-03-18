@@ -946,7 +946,7 @@ function heardWakeWord(text) {
     .replace(/[^a-z\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return /(?:^|\b)(?:hi|hey|yo|ok(?:ay)?)\s+an{1,2}a\b/.test(normalized) || /^(?:an{1,2}a)\b/.test(normalized);
+  return /(?:^|\b)(?:hi|hey|hello|yo|ok(?:ay)?|hey there)\s+an{1,2}(?:a|uh)\b/.test(normalized) || /(?:^|\b)an{1,2}(?:a|uh)\b/.test(normalized);
 }
 
 function scheduleWakeWordRestart(delay = 450) {
@@ -3604,11 +3604,11 @@ function getDailyBriefingData(userId = getCurrentUserId()) {
     alerts.push(`${blocked.length} task${blocked.length === 1 ? " is" : "s are"} waiting on dependencies`);
   }
   if (!alerts.length && focus.length) {
-    alerts.push("board looks clean — pick a focus task and move it today");
+    alerts.push("board looks clean. pick a focus task and move it today");
   }
 
   const summary = !focus.length
-    ? "no active tasks yet — ask anna for a to-do list and she’ll line up the board."
+    ? "no active tasks yet. ask anna for a to-do list and she'll line up the board."
     : `top move${focus.length === 1 ? "" : "s"} today: ${focus.map((item) => item.title).join(", ")}.`;
 
   return {
@@ -3735,7 +3735,7 @@ function getMilestoneStatusData(userId = getCurrentUserId()) {
   const rollups = getMilestoneRollups(userId);
   const slipping = rollups.filter((item) => item.health === "slipping" || item.health === "blocked");
   const summary = !rollups.length
-    ? "no milestones yet — assign tasks to a milestone and anna will track it."
+    ? "no milestones yet. assign tasks to a milestone and anna will track it."
     : slipping.length
       ? `${slipping.length} milestone${slipping.length === 1 ? " is" : "s are"} off track.`
       : `all ${rollups.length} milestone${rollups.length === 1 ? " is" : "s are"} on track or manageable.`;
@@ -3849,7 +3849,7 @@ function buildWeeklyReviewReply(section = "all", userId = getCurrentUserId()) {
   if (section === "bets") {
     return review.bets.length
       ? `next bets: ${review.bets.map((item) => item.title).join(", ")}.`
-      : "no clear next bets yet — the board needs more signal.";
+      : "no clear next bets yet. the board needs more signal.";
   }
 
   const winText = review.wins.length ? ` wins: ${review.wins.map((item) => item.title).join(", ")}.` : "";
@@ -3890,7 +3890,7 @@ function getTodayPlanData(userId = getCurrentUserId()) {
   const summary = !planned.length
     ? carryOver.length
       ? `${carryOver.length} carryover task${carryOver.length === 1 ? "" : "s"} need to be re-slotted today.`
-      : "today plan is open — schedule a task onto it."
+      : "today plan is open. schedule a task onto it."
     : `today plan has ${planned.length} task${planned.length === 1 ? "" : "s"}${milestoneNames.length ? ` across ${milestoneNames.join(", ")}` : ""}${manualCount || autoCount ? ` · ${manualCount} manual · ${autoCount} auto` : ""}.`;
 
   return {
@@ -4295,7 +4295,7 @@ function buildAutoPlanForOffset(dayOffset = 0, userId = getCurrentUserId(), appl
   if (start >= end) {
     return {
       changed: false,
-      summary: `${dayName} is basically closed out — plan the next day instead.`,
+      summary: `${dayName} is basically closed out. plan the next day instead.`,
       slots: [],
       scheduled: [],
       preserved: [],
@@ -4464,8 +4464,8 @@ function getTomorrowPlanData(userId = getCurrentUserId()) {
   const summary = planned.length
     ? `tomorrow starts with ${planned.length} slot${planned.length === 1 ? "" : "s"}${preview.carryOver.length ? ` · ${preview.carryOver.length} carryover` : ""}.`
     : preview.carryOver.length
-      ? `tomorrow needs a reset — ${preview.carryOver.length} carryover task${preview.carryOver.length === 1 ? "" : "s"} are waiting.`
-      : "tomorrow is open — build a first-pass plan before you log off.";
+      ? `tomorrow needs a reset. ${preview.carryOver.length} carryover task${preview.carryOver.length === 1 ? "" : "s"} are waiting.`
+      : "tomorrow is open. build a first-pass plan before you log off.";
 
   return {
     summary,
@@ -4660,7 +4660,7 @@ function getRiskRadarData(userId = getCurrentUserId()) {
   const escalations = risky.filter((item) => item.severity >= 3);
   return {
     summary: !risky.length
-      ? "board is clean right now — no active escalation risk."
+      ? "board is clean right now. no active escalation risk."
       : `${risky.length} task${risky.length === 1 ? " is" : "s are"} flashing risk and ${escalations.length} need escalation-level attention.`,
     risky: risky.slice(0, 6),
     escalations: escalations.slice(0, 4)
@@ -4750,7 +4750,7 @@ function buildStuckTaskEscalationReply(taskTitle, userId = getCurrentUserId()) {
   const entry = readTaskEntry(resolvedTitle, userId);
   const signals = buildRiskSignals(entry, userId);
   if (!signals.length) {
-    return `${resolvedTitle} is moving — no escalation needed right now.`;
+    return `${resolvedTitle} is moving. no escalation needed right now.`;
   }
   const promoted = promoteTaskToMustResolveToday(resolvedTitle, userId);
   const rescue = buildDependencyRescueData(resolvedTitle, userId);
@@ -6557,7 +6557,7 @@ function renderStartupDashboard() {
     if (!milestoneStatus.rollups.length) {
       const empty = document.createElement("div");
       empty.className = "startup-milestone-item is-empty";
-      empty.textContent = "no milestone groups yet — assign tasks into a milestone to see health here.";
+      empty.textContent = "no milestone groups yet. assign tasks into a milestone to see health here.";
       startupMilestoneList.appendChild(empty);
     } else {
       milestoneStatus.rollups.slice(0, 4).forEach((item) => {
@@ -6606,7 +6606,7 @@ function renderStartupDashboard() {
       empty.className = "startup-plan-item is-empty";
       empty.textContent = todayPlan.carryOver.length
         ? `carryover: ${todayPlan.carryOver.join(" · ")}`
-        : "nothing scheduled yet — tell anna to put a task on today's plan.";
+        : "nothing scheduled yet. tell anna to put a task on today's plan.";
       startupTodayPlanList.appendChild(empty);
     } else {
       todayPlan.planned.forEach((item) => {
@@ -6658,7 +6658,7 @@ function renderStartupDashboard() {
       empty.className = "startup-plan-item is-empty";
       empty.textContent = tomorrowPlan.carryOver.length
         ? `carryover waiting: ${tomorrowPlan.carryOver.join(" · ")}`
-        : "tomorrow is open — ask anna to build tomorrow's plan before you log off.";
+        : "tomorrow is open. ask anna to build tomorrow's plan before you log off.";
       startupTomorrowPlanList.appendChild(empty);
     } else {
       tomorrowPlan.planned.forEach((item) => {
@@ -7454,6 +7454,7 @@ function unlockAudioFromGesture() {
 
 function primeAudioUnlockOnFirstGesture() {
   const once = () => {
+    markVoiceActivationUnlocked();
     unlockAudioFromGesture();
     startWakeWordMonitoring();
     document.removeEventListener("pointerdown", once, true);
@@ -8033,7 +8034,7 @@ function resolvePendingAnna(pendingId, text) {
 function sanitizeAnnaDisplayText(text) {
   return String(text || "")
     .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u2013\u2014]/g, "—")
+    .replace(/[\u2013\u2014]/g, " - ")
     .replace(/(?:^|\n)\s*(?:[-*•]\s*)?\[(?: |x|X)\]\s*/g, "\n• ")
     .replace(/\[(?: |x|X)\]\s*/g, "")
     .replace(/[\[\]{}<>]/g, "")
