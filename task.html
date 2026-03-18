@@ -52,7 +52,23 @@
         </aside>
 
         <section class="task-stage" id="taskStage" aria-live="polite">
-          <h1 class="task-page-title" id="taskPageTitle">task</h1>
+          <div class="task-title-row">
+            <h1 class="task-page-title" id="taskPageTitle">task</h1>
+            <button class="glass-button" id="taskTitleEditButton" type="button">edit</button>
+          </div>
+
+          <div class="task-title-editor hidden" id="taskTitleEditor">
+            <input
+              id="taskTitleInput"
+              class="task-title-input"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              placeholder="rename task"
+            />
+            <button class="glass-button primary" id="taskTitleSaveButton" type="button">save</button>
+            <button class="glass-button" id="taskTitleCancelButton" type="button">cancel</button>
+          </div>
 
           <div class="task-toolbar">
             <button class="task-check-toggle" id="taskDoneToggle" type="button">mark done</button>
@@ -92,9 +108,13 @@
               <span class="task-operator-label">follow up</span>
               <span class="task-operator-value" id="taskReminderText">no follow-up set</span>
             </div>
-            <div class="task-operator-actions">
+            <div class="task-operator-actions-compact">
+              <button class="glass-button primary" id="taskActionToggle" type="button" aria-expanded="false" aria-controls="taskActionMenu">actions</button>
+              <div class="task-operator-actions-summary" id="taskActionSummary">tap for actions</div>
+            </div>
+            <div class="task-operator-actions hidden" id="taskActionMenu">
               <button class="glass-button primary" id="taskStartNowButton" type="button">start now</button>
-              <button class="glass-button" id="taskFinishStepButton" type="button">finish next step</button>
+              <button class="glass-button" id="taskFinishStepButton" type="button">finish</button>
               <button class="glass-button" id="taskPauseButton" type="button">pause</button>
               <button class="glass-button" id="taskUnblockButton" type="button">clear blocker</button>
               <button class="glass-button" id="taskPlanButton" type="button">build plan</button>

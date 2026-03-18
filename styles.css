@@ -338,13 +338,13 @@ button {
 
 .startup-summary-card {
   display: grid;
-  gap: 0.22rem;
+  gap: 0.3rem;
   min-width: 0;
-  min-height: 104px;
-  padding: 0.82rem 0.85rem;
+  min-height: 118px;
+  padding: 0.9rem 0.9rem;
   border-radius: 20px;
   text-decoration: none;
-  background: linear-gradient(135deg, rgba(255, 120, 46, 0.9) 0%, rgba(255, 154, 83, 0.84) 54%, rgba(255, 213, 126, 0.76) 100%);
+  background: linear-gradient(90deg, rgba(255, 223, 154, 0.96) 0%, rgba(255, 172, 90, 0.9) 48%, rgba(210, 98, 28, 0.94) 100%);
   border: 1px solid rgba(255, 137, 64, 0.34);
   box-shadow: 0 18px 34px rgba(255, 120, 46, 0.16);
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
@@ -366,17 +366,18 @@ button {
   letter-spacing: 0.02em;
 }
 
-.startup-summary-copy {
+.startup-summary-stat {
   color: var(--olive);
-  font-size: 0.9rem;
-  font-weight: 800;
-  line-height: 1.28;
+  font-size: 1.5rem;
+  font-weight: 900;
+  line-height: 1.05;
 }
 
 .startup-summary-meta {
   color: rgba(33, 64, 0, 0.78);
   font-size: 0.74rem;
   line-height: 1.35;
+  margin-top: auto;
 }
 
 .startup-section-head {
@@ -893,6 +894,30 @@ button {
   font-family: "Playfair Display", ui-serif, Georgia, serif;
 }
 
+.task-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.task-title-editor {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.task-title-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.85rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(96, 142, 60, 0.22);
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--ink);
+  outline: none;
+}
+
 .task-toolbar {
   display: flex;
   align-items: center;
@@ -1040,14 +1065,31 @@ button {
 }
 
 .task-operator-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
-  margin-top: 1rem;
+  margin-top: 0.85rem;
 }
 
 .task-operator-actions .glass-button {
   min-height: 40px;
+}
+
+.task-operator-actions-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.task-operator-actions-summary {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .task-decision-list {
@@ -1112,6 +1154,12 @@ button {
   gap: 0.7rem;
 }
 
+.task-subtask-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .task-subtask-title {
   flex: 1;
   padding: 0.82rem 0.9rem;
@@ -1133,6 +1181,17 @@ button {
   color: var(--olive-deep);
   font-weight: 800;
   flex: 0 0 auto;
+}
+
+.task-subtask-edit {
+  min-height: 30px;
+  padding: 0.35rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid rgba(96, 142, 60, 0.2);
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--olive);
+  font-size: 0.74rem;
+  font-weight: 700;
 }
 
 .task-subtask-item.is-complete .task-subtask-title {

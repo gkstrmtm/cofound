@@ -73,7 +73,15 @@ const taskRemindLaterButton = document.getElementById("taskRemindLaterButton");
 const taskTomorrowButton = document.getElementById("taskTomorrowButton");
 const taskDailyFollowupButton = document.getElementById("taskDailyFollowupButton");
 const taskClearFollowupButton = document.getElementById("taskClearFollowupButton");
+const taskActionToggle = document.getElementById("taskActionToggle");
+const taskActionMenu = document.getElementById("taskActionMenu");
+const taskActionSummary = document.getElementById("taskActionSummary");
 const taskDoneToggle = document.getElementById("taskDoneToggle");
+const taskTitleEditButton = document.getElementById("taskTitleEditButton");
+const taskTitleEditor = document.getElementById("taskTitleEditor");
+const taskTitleInput = document.getElementById("taskTitleInput");
+const taskTitleSaveButton = document.getElementById("taskTitleSaveButton");
+const taskTitleCancelButton = document.getElementById("taskTitleCancelButton");
 const taskNotesInput = document.getElementById("taskNotesInput");
 const taskTalkButton = document.getElementById("taskTalkButton");
 const voiceTriggerButton = document.getElementById("voiceTriggerButton");
@@ -5208,6 +5216,114 @@ function toggleTaskSubtask(title, subtaskId, userId = getCurrentUserId()) {
   );
 }
 
+function renameTaskSubtask(title, subtaskId, nextTitle, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(nextTitle);
+  if (!normalized) {
+    return readTaskEntry(title, userId);
+  }
+  return updateTaskEntry(
+    title,
+    (current) => {
+      const existing = normalizeSubtaskList(current.subtasks).find((item) => item.id === subtaskId);
+      if (!existing) {
+        return current;
+      }
+      return {
+        ...current,
+        nextAction: current.nextAction === existing.title ? normalized : current.nextAction,
+        subtasks: normalizeSubtaskList(current.subtasks).map((item) => (
+          item.id === subtaskId ? { ...item, title: normalized } : item
+        ))
+      };
+    },
+    userId
+  );
+}
+
+function renameTask(title, nextTitle, userId = getCurrentUserId()) {
+  const currentTitle = normalizeTaskTitle(title);
+  const normalizedNext = normalizeTaskTitle(nextTitle);
+  if (!currentTitle || !normalizedNext) {
+    return { changed: false, reason: "invalid", entry: readTaskEntry(title, userId) };
+  }
+  if (currentTitle === normalizedNext) {
+    return { changed: false, reason: "same", entry: readTaskEntry(title, userId) };
+  }
+
+  const store = readTaskStateStore();
+  const userMap = store && typeof store[userId] === "object" ? store[userId] : {};
+  const nextKey = makeTaskKey(normalizedNext);
+  const existing = userMap[nextKey];
+  if (existing && normalizeTaskTitle(existing.title) !== currentTitle) {
+    return { changed: false, reason: "exists", entry: readTaskEntry(title, userId) };
+  }
+
+  const nextUserMap = {};
+  Object.values(userMap).forEach((rawEntry) => {
+    const rawTitle = normalizeTaskTitle(rawEntry?.title || "");
+    if (!rawTitle) {
+      return;
+    }
+    const entry = readTaskEntry(rawTitle, userId);
+    const nextEntry = rawTitle === currentTitle
+      ? { ...entry, title: normalizedNext }
+      : {
+          ...entry,
+          dependsOn: normalizeTaskDependencyList(entry.dependsOn.map((item) => (
+            normalizeTaskTitle(item) === currentTitle ? normalizedNext : item
+          )))
+        };
+    nextUserMap[makeTaskKey(nextEntry.title)] = {
+      ...nextEntry,
+      updatedAt: Date.now()
+    };
+  });
+
+  store[userId] = nextUserMap;
+  writeTaskStateStore(store);
+
+  const nextLists = readStartupLists().map((list) => {
+    if (String(list?.userId || "") !== userId || !Array.isArray(list?.items)) {
+      return list;
+    }
+    return {
+      ...list,
+      items: list.items.map((item) => (
+        normalizeTaskTitle(item) === currentTitle ? normalizedNext : normalizeTaskTitle(item)
+      ))
+    };
+  });
+  writeStartupLists(nextLists);
+
+  const nextDecisionLog = readJson(STORAGE_KEYS.decisionLog, []).map((entry) => {
+    if (String(entry?.userId || "") !== userId) {
+      return entry;
+    }
+    return normalizeTaskTitle(entry?.taskTitle || "") === currentTitle
+      ? { ...entry, taskTitle: normalizedNext }
+      : entry;
+  });
+  writeJson(STORAGE_KEYS.decisionLog, nextDecisionLog);
+
+  const operatorState = readOperatorState(userId);
+  if (operatorState.focusTaskTitle === currentTitle || normalizeTaskTitle(operatorState.meetingTopic) === currentTitle) {
+    writeOperatorStateForUser({
+      focusTaskTitle: operatorState.focusTaskTitle === currentTitle ? normalizedNext : operatorState.focusTaskTitle,
+      meetingTopic: normalizeTaskTitle(operatorState.meetingTopic) === currentTitle ? normalizedNext : operatorState.meetingTopic
+    }, userId);
+  }
+
+  const active = readActiveTaskContext();
+  if (active?.title === currentTitle) {
+    setActiveTaskContext(normalizedNext);
+  }
+  if (window.location.pathname.endsWith("task.html") && getCurrentTaskTitle() === currentTitle) {
+    window.history.replaceState({}, "", buildTaskHref(normalizedNext));
+  }
+
+  return { changed: true, reason: "renamed", entry: readTaskEntry(normalizedNext, userId) };
+}
+
 function getTaskProgressValue(entry) {
   if (entry?.completed) {
     return 100;
@@ -6424,39 +6540,34 @@ function renderStartupDashboard() {
   const operatorState = readOperatorState(userId);
 
   const pulseSummary = briefing.focus.length
-    ? briefing.focus.slice(0, 2).map((item) => item.title).join(" · ")
-    : briefing.alerts[0] || "ready to move";
-  const plansSummary = todayPlan.planned.length
-    ? todayPlan.planned.slice(0, 2).map((item) => item.title).join(" · ")
-    : tomorrowPlan.planned.length
-      ? `tomorrow: ${tomorrowPlan.planned[0].title}`
-      : "nothing slotted yet";
+    ? `${briefing.focus.length} move${briefing.focus.length === 1 ? "" : "s"}`
+    : `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}`;
+  const plansTodayCount = todayPlan.planned.length || todayPlan.carryOver.length;
+  const plansSummary = `${plansTodayCount} today`;
   const healthSummary = riskRadar.risky.length
-    ? riskRadar.risky.slice(0, 2).map((item) => item.title).join(" · ")
-    : milestoneStatus.rollups.length
-      ? milestoneStatus.rollups.slice(0, 2).map((item) => item.milestone).join(" · ")
-      : weeklyReview.wins[0]?.title || "board looks steady";
+    ? `${riskRadar.risky.length} risk${riskRadar.risky.length === 1 ? "" : "s"}`
+    : `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}`;
   const operatorSummary = operatorState.focusTaskTitle
-    ? `focus: ${operatorState.focusTaskTitle}`
+    ? "focus live"
     : operatorState.meetingActive
-      ? `meeting: ${operatorState.meetingTopic || "live"}`
-      : decisions[0]?.summary || `${roadmap.length} systems live`;
+      ? "meeting live"
+      : `${roadmap.length} live`;
 
   const pulseMetaParts = [
-    briefing.alerts.length ? `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}` : "board calm",
-    briefing.focus.length ? `${briefing.focus.length} move${briefing.focus.length === 1 ? "" : "s"}` : "no queue"
+    `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}`,
+    `${briefing.focus.length} move${briefing.focus.length === 1 ? "" : "s"}`
   ];
   const plansMetaParts = [
-    todayPlan.planned.length ? `${todayPlan.planned.length} today` : todayPlan.carryOver.length ? `${todayPlan.carryOver.length} carryover` : "today open",
-    tomorrowPlan.planned.length ? `${tomorrowPlan.planned.length} tomorrow` : "tomorrow open"
+    `today ${plansTodayCount}`,
+    `tomorrow ${tomorrowPlan.planned.length}`
   ];
   const healthMetaParts = [
-    riskRadar.risky.length ? `${riskRadar.risky.length} risk${riskRadar.risky.length === 1 ? "" : "s"}` : "no risk spikes",
-    milestoneStatus.rollups.length ? `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}` : "no milestones"
+    `risks ${riskRadar.risky.length}`,
+    `milestones ${milestoneStatus.rollups.length}`
   ];
   const operatorMetaParts = [
-    decisions.length ? `${decisions.length} decision${decisions.length === 1 ? "" : "s"}` : `${roadmap.length} systems live`,
-    operatorState.ritualLog.length ? `${operatorState.ritualLog.length} ritual note${operatorState.ritualLog.length === 1 ? "" : "s"}` : "no ritual notes"
+    `systems ${roadmap.length}`,
+    `decisions ${decisions.length}`
   ];
 
   if (projectsLeftEl) {
@@ -6977,10 +7088,60 @@ function renderTaskSubtasks(title) {
       renderStartupDashboard();
     });
 
+    const actions = document.createElement("div");
+    actions.className = "task-subtask-actions";
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "task-subtask-edit";
+    edit.textContent = "edit";
+    edit.addEventListener("click", () => {
+      const nextTitle = window.prompt("rename subtask", subtask.title);
+      if (nextTitle == null) {
+        return;
+      }
+      renameTaskSubtask(title, subtask.id, nextTitle);
+      renderTaskWorkspace();
+      renderStartupDashboard();
+    });
+
+    actions.appendChild(edit);
+    actions.appendChild(check);
+
     row.appendChild(label);
-    row.appendChild(check);
+    row.appendChild(actions);
     taskSubtaskList.appendChild(row);
   });
+}
+
+let isTaskActionMenuOpen = false;
+let isTaskTitleEditorOpen = false;
+
+function setTaskActionMenuOpen(isOpen) {
+  const nextOpen = Boolean(isOpen);
+  isTaskActionMenuOpen = nextOpen;
+  if (taskActionMenu) {
+    taskActionMenu.classList.toggle("hidden", !nextOpen);
+  }
+  if (taskActionToggle) {
+    taskActionToggle.setAttribute("aria-expanded", String(nextOpen));
+    taskActionToggle.textContent = nextOpen ? "hide actions" : "actions";
+  }
+}
+
+function setTaskTitleEditorOpen(isOpen) {
+  const nextOpen = Boolean(isOpen);
+  isTaskTitleEditorOpen = nextOpen;
+  if (taskTitleEditor) {
+    taskTitleEditor.classList.toggle("hidden", !nextOpen);
+  }
+  if (taskTitleInput && nextOpen) {
+    taskTitleInput.value = getCurrentTaskTitle() || "";
+    window.setTimeout(() => {
+      taskTitleInput.focus();
+      taskTitleInput.select();
+    }, 0);
+  }
 }
 
 function renderTaskWorkspace() {
@@ -7040,6 +7201,17 @@ function renderTaskWorkspace() {
     [taskStartNowButton, taskFinishStepButton, taskPauseButton, taskUnblockButton, taskPlanButton, taskRemindLaterButton, taskTomorrowButton, taskDailyFollowupButton, taskClearFollowupButton].forEach((button) => {
       if (button) button.disabled = true;
     });
+    if (taskActionToggle) {
+      taskActionToggle.disabled = true;
+    }
+    if (taskActionSummary) {
+      taskActionSummary.textContent = "pick a task to unlock actions";
+    }
+    if (taskTitleEditButton) {
+      taskTitleEditButton.disabled = true;
+    }
+    setTaskActionMenuOpen(false);
+    setTaskTitleEditorOpen(false);
     if (taskNotesInput) {
       taskNotesInput.value = "";
       taskNotesInput.disabled = true;
@@ -7077,6 +7249,12 @@ function renderTaskWorkspace() {
 
   if (taskPageTitle) {
     taskPageTitle.textContent = title;
+  }
+  if (taskTitleInput && document.activeElement !== taskTitleInput) {
+    taskTitleInput.value = title;
+  }
+  if (taskTitleEditButton) {
+    taskTitleEditButton.disabled = false;
   }
   if (taskPageStatus) {
     taskPageStatus.textContent = `${formatTaskWorkflowLabel(workflowStatus)} · ${subtaskStatus}`;
@@ -7185,6 +7363,15 @@ function renderTaskWorkspace() {
   }
   if (taskClearFollowupButton) {
     taskClearFollowupButton.disabled = !state.reminderAt && !state.reminderCadence;
+  }
+  if (taskActionToggle) {
+    taskActionToggle.disabled = false;
+  }
+  if (taskActionSummary) {
+    taskActionSummary.textContent = [
+      workflowStatus === "active" ? "live" : state.blocker ? "blocked" : "ready",
+      state.reminderAt || state.reminderCadence ? "follow-up on" : "follow-up off"
+    ].join(" · ");
   }
   if (taskDoneToggle) {
     taskDoneToggle.disabled = false;
@@ -9045,6 +9232,43 @@ function addCurrentTaskSubtask() {
 
 taskSubtaskAdd?.addEventListener("click", addCurrentTaskSubtask);
 
+taskActionToggle?.addEventListener("click", () => {
+  setTaskActionMenuOpen(!isTaskActionMenuOpen);
+});
+
+taskTitleEditButton?.addEventListener("click", () => {
+  setTaskTitleEditorOpen(!isTaskTitleEditorOpen);
+});
+
+function saveCurrentTaskTitle() {
+  const title = getCurrentTaskTitle();
+  const nextTitle = String(taskTitleInput?.value || "").trim();
+  if (!title || !nextTitle) {
+    return;
+  }
+  const result = renameTask(title, nextTitle);
+  if (result.reason === "exists") {
+    window.alert("that task name already exists.");
+    return;
+  }
+  renderStartupDashboard();
+  renderTaskWorkspace();
+  setTaskTitleEditorOpen(false);
+}
+
+taskTitleSaveButton?.addEventListener("click", saveCurrentTaskTitle);
+taskTitleCancelButton?.addEventListener("click", () => setTaskTitleEditorOpen(false));
+taskTitleInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveCurrentTaskTitle();
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setTaskTitleEditorOpen(false);
+  }
+});
+
 taskSubtaskInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {
     return;
@@ -9059,6 +9283,7 @@ taskStartNowButton?.addEventListener("click", () => {
     return;
   }
   startTaskWorkSession(title, { minutes: 45 });
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9069,6 +9294,7 @@ taskFinishStepButton?.addEventListener("click", () => {
     return;
   }
   completeNextOpenSubtask(title);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9079,6 +9305,7 @@ taskPauseButton?.addEventListener("click", () => {
     return;
   }
   pauseTaskExecution(title);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9089,6 +9316,7 @@ taskUnblockButton?.addEventListener("click", () => {
     return;
   }
   clearTaskBlocker(title);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9099,6 +9327,7 @@ taskPlanButton?.addEventListener("click", () => {
     return;
   }
   buildLocalTaskExecutionPlan(title);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9113,6 +9342,7 @@ taskRemindLaterButton?.addEventListener("click", () => {
     return;
   }
   setTaskReminderState(title, parsed);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9127,6 +9357,7 @@ taskTomorrowButton?.addEventListener("click", () => {
     return;
   }
   setTaskReminderState(title, parsed);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9141,6 +9372,7 @@ taskDailyFollowupButton?.addEventListener("click", () => {
     return;
   }
   setTaskReminderState(title, parsed);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
@@ -9151,6 +9383,7 @@ taskClearFollowupButton?.addEventListener("click", () => {
     return;
   }
   clearTaskReminderState(title);
+  setTaskActionMenuOpen(false);
   renderStartupDashboard();
   renderTaskWorkspace();
 });
