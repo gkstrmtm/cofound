@@ -69,25 +69,25 @@
           </div>
 
           <div class="startup-summary-grid" aria-label="startup summaries">
-            <a class="startup-summary-card" href="#startupDetailPulse">
-              <div class="startup-summary-label">daily pulse</div>
-              <div class="startup-summary-copy" id="startupPulseSummary">loading today’s board...</div>
-              <div class="startup-summary-meta" id="startupPulseMeta">scanning the board...</div>
+            <a class="startup-summary-card" href="pulse.html">
+              <div class="startup-summary-label">top moves today</div>
+              <div class="startup-summary-copy" id="startupPulseSummary">loading today...</div>
+              <div class="startup-summary-meta" id="startupPulseMeta">tap to open</div>
             </a>
-            <a class="startup-summary-card" href="#startupDetailPlans">
+            <a class="startup-summary-card" href="plans.html">
               <div class="startup-summary-label">plans</div>
-              <div class="startup-summary-copy" id="startupPlansSummary">loading today’s plan...</div>
-              <div class="startup-summary-meta" id="startupPlansMeta">checking today and tomorrow...</div>
+              <div class="startup-summary-copy" id="startupPlansSummary">loading plans...</div>
+              <div class="startup-summary-meta" id="startupPlansMeta">tap to open</div>
             </a>
-            <a class="startup-summary-card" href="#startupDetailHealth">
+            <a class="startup-summary-card" href="health.html">
               <div class="startup-summary-label">health</div>
-              <div class="startup-summary-copy" id="startupHealthSummary">loading board health...</div>
-              <div class="startup-summary-meta" id="startupHealthMeta">checking risks and milestones...</div>
+              <div class="startup-summary-copy" id="startupHealthSummary">loading health...</div>
+              <div class="startup-summary-meta" id="startupHealthMeta">tap to open</div>
             </a>
-            <a class="startup-summary-card" href="#startupDetailOperator">
+            <a class="startup-summary-card" href="operator.html">
               <div class="startup-summary-label">operator</div>
-              <div class="startup-summary-copy" id="startupOperatorSummary">loading operator systems...</div>
-              <div class="startup-summary-meta" id="startupOperatorMeta">checking focus, meetings, and decisions...</div>
+              <div class="startup-summary-copy" id="startupOperatorSummary">loading operator...</div>
+              <div class="startup-summary-meta" id="startupOperatorMeta">tap to open</div>
             </a>
           </div>
 
@@ -97,120 +97,6 @@
           </div>
 
           <div class="startup-tasks" id="startupTasks" role="list" aria-label="tasks"></div>
-
-          <div class="startup-section-head startup-section-head-secondary">
-            <div class="startup-section-title">details</div>
-            <div class="startup-section-copy">tap any summary card above to jump here.</div>
-          </div>
-
-          <div class="startup-briefing-card" id="startupDetailPulse">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">daily briefing</div>
-                <div class="startup-briefing-summary" id="startupBriefingSummary">
-                  loading today’s board...
-                </div>
-              </div>
-            </div>
-            <div class="startup-briefing-alerts" id="startupBoardAlerts"></div>
-            <div class="startup-briefing-focus" id="startupFocusList"></div>
-          </div>
-
-          <div class="startup-briefing-card">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">standup</div>
-                <div class="startup-briefing-summary" id="startupStandupSummary">
-                  loading today’s standup...
-                </div>
-              </div>
-            </div>
-            <div class="startup-timeline-list" id="startupTimelineList"></div>
-          </div>
-
-          <div class="startup-briefing-card" id="startupDetailPlans">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">today plan</div>
-                <div class="startup-briefing-summary" id="startupTodayPlanSummary">
-                  loading today’s plan...
-                </div>
-              </div>
-            </div>
-            <div class="startup-plan-list" id="startupTodayPlanList"></div>
-          </div>
-
-          <div class="startup-briefing-card">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">tomorrow plan</div>
-                <div class="startup-briefing-summary" id="startupTomorrowPlanSummary">
-                  loading tomorrow’s plan...
-                </div>
-              </div>
-            </div>
-            <div class="startup-plan-list" id="startupTomorrowPlanList"></div>
-          </div>
-
-          <div class="startup-briefing-card" id="startupDetailHealth">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">weekly review</div>
-                <div class="startup-briefing-summary" id="startupWeeklyReviewSummary">
-                  loading weekly review...
-                </div>
-              </div>
-            </div>
-            <div class="startup-review-list" id="startupWeeklyReviewList"></div>
-          </div>
-
-          <div class="startup-briefing-card">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">milestones</div>
-                <div class="startup-briefing-summary" id="startupMilestoneSummary">
-                  loading milestone health...
-                </div>
-              </div>
-            </div>
-            <div class="startup-milestone-list" id="startupMilestoneList"></div>
-          </div>
-
-          <div class="startup-briefing-card">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">risk radar</div>
-                <div class="startup-briefing-summary" id="startupRiskSummary">
-                  scanning risk across the board...
-                </div>
-              </div>
-            </div>
-            <div class="startup-review-list" id="startupRiskList"></div>
-          </div>
-
-          <div class="startup-briefing-card" id="startupDetailOperator">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">operator roadmap</div>
-                <div class="startup-briefing-summary" id="startupRoadmapSummary">
-                  loading operator systems...
-                </div>
-              </div>
-            </div>
-            <div class="startup-review-list" id="startupRoadmapList"></div>
-          </div>
-
-          <div class="startup-briefing-card">
-            <div class="startup-briefing-header">
-              <div>
-                <div class="startup-briefing-eyebrow">operating room</div>
-                <div class="startup-briefing-summary" id="startupMeetingSummary">
-                  loading meeting mode and decision log...
-                </div>
-              </div>
-            </div>
-            <div class="startup-review-list" id="startupDecisionList"></div>
-          </div>
         </section>
 
         <section class="bottom-sheet" id="listSheet" aria-hidden="true">

@@ -147,7 +147,7 @@ def seed_state(page):
           localStorage.setItem('anna:activeTask', JSON.stringify({ title: 'launch email', userId, updatedAt: now }));
           refreshUiFromStoredState();
           return {
-            startup: document.getElementById('startupRoadmapSummary')?.textContent || '',
+            startup: document.getElementById('startupOperatorSummary')?.textContent || '',
             active: getCurrentTaskTitle(),
             risky: getRiskRadarData().risky.length
           };
@@ -172,7 +172,7 @@ def main():
         page.wait_for_timeout(1500)
         seeded = seed_state(page)
         assert_true(seeded["active"] == "launch email", "active task did not seed correctly")
-        assert_true("operator systems" in seeded["startup"], "startup roadmap summary did not render")
+        assert_true(bool(seeded["startup"].strip()), "startup operator summary did not render")
         assert_true(seeded["risky"] >= 2, "risk radar did not identify risky tasks")
 
         result = page.evaluate(
@@ -211,8 +211,8 @@ def main():
                 createdPricing: readTaskEntry('pricing experiment'),
                 escalated: readTaskEntry('api contract'),
                 risk: getRiskRadarData(),
-                startupRiskSummary: document.getElementById('startupRiskSummary')?.textContent || '',
-                startupMeetingSummary: document.getElementById('startupMeetingSummary')?.textContent || ''
+                startupHealthSummary: document.getElementById('startupHealthSummary')?.textContent || '',
+                startupOperatorSummary: document.getElementById('startupOperatorSummary')?.textContent || ''
               };
             }
             """
@@ -237,8 +237,8 @@ def main():
         assert_true(result['createdPricing']['ownerName'] == 'anna', 'second brainstorm task owner missing')
         assert_true(result['escalated']['priority'] == 'top' and result['escalated']['focusLabel'] == 'today' and bool(result['escalated']['escalatedAt']), 'long blocked task was not auto-escalated')
         assert_true(len(result['risk']['risky']) >= 2, 'risk radar no longer reports risky tasks')
-        assert_true(result['startupRiskSummary'], 'startup risk summary did not render')
-        assert_true(result['startupMeetingSummary'], 'startup meeting summary did not render')
+        assert_true(result['startupHealthSummary'], 'startup health summary did not render')
+        assert_true(result['startupOperatorSummary'], 'startup operator summary did not render')
 
         page.goto(f"{BASE_URL}/task.html?task=launch%20email", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)

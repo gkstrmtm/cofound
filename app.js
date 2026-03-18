@@ -6423,23 +6423,39 @@ function renderStartupDashboard() {
   const decisions = readDecisionLog(userId).slice(0, 4);
   const operatorState = readOperatorState(userId);
 
+  const pulseSummary = briefing.focus.length
+    ? briefing.focus.slice(0, 2).map((item) => item.title).join(" · ")
+    : briefing.alerts[0] || "ready to move";
+  const plansSummary = todayPlan.planned.length
+    ? todayPlan.planned.slice(0, 2).map((item) => item.title).join(" · ")
+    : tomorrowPlan.planned.length
+      ? `tomorrow: ${tomorrowPlan.planned[0].title}`
+      : "nothing slotted yet";
+  const healthSummary = riskRadar.risky.length
+    ? riskRadar.risky.slice(0, 2).map((item) => item.title).join(" · ")
+    : milestoneStatus.rollups.length
+      ? milestoneStatus.rollups.slice(0, 2).map((item) => item.milestone).join(" · ")
+      : weeklyReview.wins[0]?.title || "board looks steady";
+  const operatorSummary = operatorState.focusTaskTitle
+    ? `focus: ${operatorState.focusTaskTitle}`
+    : operatorState.meetingActive
+      ? `meeting: ${operatorState.meetingTopic || "live"}`
+      : decisions[0]?.summary || `${roadmap.length} systems live`;
+
   const pulseMetaParts = [
-    briefing.alerts.length ? `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}` : "board is calm",
-    briefing.focus.length ? `${briefing.focus.length} focus item${briefing.focus.length === 1 ? "" : "s"}` : "no focus queue",
-    timeline.length ? `${timeline.length} recent move${timeline.length === 1 ? "" : "s"}` : "no recent changes"
+    briefing.alerts.length ? `${briefing.alerts.length} alert${briefing.alerts.length === 1 ? "" : "s"}` : "board calm",
+    briefing.focus.length ? `${briefing.focus.length} move${briefing.focus.length === 1 ? "" : "s"}` : "no queue"
   ];
   const plansMetaParts = [
-    todayPlan.planned.length ? `${todayPlan.planned.length} on today` : todayPlan.carryOver.length ? `${todayPlan.carryOver.length} carryover` : "today is open",
-    tomorrowPlan.planned.length ? `${tomorrowPlan.planned.length} queued next` : "tomorrow is open"
+    todayPlan.planned.length ? `${todayPlan.planned.length} today` : todayPlan.carryOver.length ? `${todayPlan.carryOver.length} carryover` : "today open",
+    tomorrowPlan.planned.length ? `${tomorrowPlan.planned.length} tomorrow` : "tomorrow open"
   ];
   const healthMetaParts = [
-    riskRadar.risky.length ? `${riskRadar.risky.length} risk flag${riskRadar.risky.length === 1 ? "" : "s"}` : "no risk spikes",
-    milestoneStatus.rollups.length ? `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}` : "no milestones",
-    weeklyReview.slips.length ? `${weeklyReview.slips.length} slip${weeklyReview.slips.length === 1 ? "" : "s"}` : weeklyReview.wins.length ? `${weeklyReview.wins.length} win${weeklyReview.wins.length === 1 ? "" : "s"}` : "waiting on more signal"
+    riskRadar.risky.length ? `${riskRadar.risky.length} risk${riskRadar.risky.length === 1 ? "" : "s"}` : "no risk spikes",
+    milestoneStatus.rollups.length ? `${milestoneStatus.rollups.length} milestone${milestoneStatus.rollups.length === 1 ? "" : "s"}` : "no milestones"
   ];
   const operatorMetaParts = [
-    `${roadmap.length} systems live`,
-    decisions.length ? `${decisions.length} recent decision${decisions.length === 1 ? "" : "s"}` : "no recent decisions",
+    decisions.length ? `${decisions.length} decision${decisions.length === 1 ? "" : "s"}` : `${roadmap.length} systems live`,
     operatorState.ritualLog.length ? `${operatorState.ritualLog.length} ritual note${operatorState.ritualLog.length === 1 ? "" : "s"}` : "no ritual notes"
   ];
 
@@ -6455,25 +6471,25 @@ function renderStartupDashboard() {
   }
 
   if (startupPulseSummary) {
-    startupPulseSummary.textContent = briefing.summary;
+    startupPulseSummary.textContent = pulseSummary;
   }
   if (startupPulseMeta) {
     startupPulseMeta.textContent = pulseMetaParts.join(" · ");
   }
   if (startupPlansSummary) {
-    startupPlansSummary.textContent = todayPlan.summary;
+    startupPlansSummary.textContent = plansSummary;
   }
   if (startupPlansMeta) {
     startupPlansMeta.textContent = plansMetaParts.join(" · ");
   }
   if (startupHealthSummary) {
-    startupHealthSummary.textContent = riskRadar.risky.length ? riskRadar.summary : weeklyReview.summary;
+    startupHealthSummary.textContent = healthSummary;
   }
   if (startupHealthMeta) {
     startupHealthMeta.textContent = healthMetaParts.join(" · ");
   }
   if (startupOperatorSummary) {
-    startupOperatorSummary.textContent = `${getMeetingModeSummary(userId)} ${getFocusModeSummary(userId)}`.trim() || "operator stack is standing by.";
+    startupOperatorSummary.textContent = operatorSummary;
   }
   if (startupOperatorMeta) {
     startupOperatorMeta.textContent = operatorMetaParts.join(" · ");

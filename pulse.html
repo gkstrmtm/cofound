@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>daily pulse</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/png" href="brand/1.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="app-frame" aria-label="daily pulse">
+        <header class="topbar">
+          <button class="icon-button" id="menuButton" aria-label="menu" type="button">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+
+          <div class="topbar-spacer" aria-hidden="true"></div>
+
+          <button class="topbar-logo topbar-voice-button" id="voiceTriggerButton" type="button" aria-label="talk to anna">
+            <div class="anna-logo anna-logo-small topbar-voice-logo record-logo image-loaded" aria-hidden="true">
+              <img class="logo-image" src="brand/record-button-logo.png" alt="" decoding="async" />
+              <span class="logo-triangle"></span>
+              <span class="logo-orb"></span>
+            </div>
+          </button>
+        </header>
+
+        <section class="inline-voice-tray hidden" id="inlineVoiceTray" aria-hidden="true" aria-live="polite">
+          <button class="inline-voice-close" id="inlineVoiceClose" type="button" aria-label="close voice update">×</button>
+          <div class="inline-voice-list" id="inlineVoiceList"></div>
+        </section>
+
+        <aside class="menu-drawer" id="menuDrawer" aria-hidden="true">
+          <button class="menu-scrim" id="menuScrim" aria-label="close menu" type="button"></button>
+          <div class="menu-panel" role="dialog" aria-label="menu">
+            <button class="menu-close" id="menuClose" aria-label="close" type="button">×</button>
+            <nav class="menu-list" aria-label="menu items">
+              <a class="menu-item" href="index.html">talk to anna</a>
+              <a class="menu-item" href="startup.html">your startup</a>
+              <a class="menu-item" href="plans.html">plans</a>
+              <a class="menu-item" href="health.html">health</a>
+              <a class="menu-item" href="operator.html">operator</a>
+            </nav>
+          </div>
+        </aside>
+
+        <section class="startup-stage" aria-live="polite">
+          <h1 class="startup-title">daily pulse</h1>
+          <div class="startup-name" id="startupNameText">startup</div>
+
+          <div class="startup-section-head">
+            <div class="startup-section-title">today</div>
+            <div class="startup-section-copy">board pulse, standup, and recent movement.</div>
+          </div>
+
+          <div class="startup-briefing-card">
+            <div class="startup-briefing-header">
+              <div>
+                <div class="startup-briefing-eyebrow">daily briefing</div>
+                <div class="startup-briefing-summary" id="startupBriefingSummary">loading today...</div>
+              </div>
+            </div>
+            <div class="startup-briefing-alerts" id="startupBoardAlerts"></div>
+            <div class="startup-briefing-focus" id="startupFocusList"></div>
+          </div>
+
+          <div class="startup-briefing-card">
+            <div class="startup-briefing-header">
+              <div>
+                <div class="startup-briefing-eyebrow">standup</div>
+                <div class="startup-briefing-summary" id="startupStandupSummary">loading standup...</div>
+              </div>
+            </div>
+            <div class="startup-timeline-list" id="startupTimelineList"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
