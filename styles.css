@@ -989,6 +989,31 @@ button {
   min-height: 40px;
 }
 
+.task-decision-list {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.task-decision-item {
+  padding: 0.8rem 0.9rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(96, 142, 60, 0.18);
+}
+
+.task-decision-copy {
+  color: var(--olive-deep);
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.task-decision-meta {
+  margin-top: 0.32rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .task-notes-label,
 .task-related-title {
   display: block;
@@ -1079,6 +1104,53 @@ button {
 .task-related-list {
   display: grid;
   gap: 0.65rem;
+}
+
+.startup-ops-item {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.82rem 0.9rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-ops-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.startup-ops-title {
+  color: var(--olive-deep);
+  font-weight: 800;
+}
+
+.startup-ops-status {
+  color: var(--olive-deep);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.startup-ops-copy {
+  color: var(--olive);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.startup-ops-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.startup-ops-link {
+  color: var(--olive-deep);
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .task-related-item {

@@ -30,6 +30,12 @@ const startupTodayPlanSummary = document.getElementById("startupTodayPlanSummary
 const startupTodayPlanList = document.getElementById("startupTodayPlanList");
 const startupTomorrowPlanSummary = document.getElementById("startupTomorrowPlanSummary");
 const startupTomorrowPlanList = document.getElementById("startupTomorrowPlanList");
+const startupRoadmapSummary = document.getElementById("startupRoadmapSummary");
+const startupRoadmapList = document.getElementById("startupRoadmapList");
+const startupRiskSummary = document.getElementById("startupRiskSummary");
+const startupRiskList = document.getElementById("startupRiskList");
+const startupMeetingSummary = document.getElementById("startupMeetingSummary");
+const startupDecisionList = document.getElementById("startupDecisionList");
 const startupStandupSummary = document.getElementById("startupStandupSummary");
 const startupTimelineList = document.getElementById("startupTimelineList");
 const startupTasksEl = document.getElementById("startupTasks");
@@ -46,6 +52,10 @@ const taskNextActionText = document.getElementById("taskNextActionText");
 const taskBlockerText = document.getElementById("taskBlockerText");
 const taskSessionText = document.getElementById("taskSessionText");
 const taskReminderText = document.getElementById("taskReminderText");
+const taskFocusText = document.getElementById("taskFocusText");
+const taskRescueText = document.getElementById("taskRescueText");
+const taskMeetingText = document.getElementById("taskMeetingText");
+const taskDecisionList = document.getElementById("taskDecisionList");
 const taskStartNowButton = document.getElementById("taskStartNowButton");
 const taskFinishStepButton = document.getElementById("taskFinishStepButton");
 const taskPauseButton = document.getElementById("taskPauseButton");
@@ -165,7 +175,10 @@ const STORAGE_KEYS = {
   chatSessions: "anna:chatSessions",
   startupLists: "anna:startupLists",
   taskState: "anna:taskState",
-  activeTask: "anna:activeTask"
+  activeTask: "anna:activeTask",
+  operatorRoadmap: "anna:operatorRoadmap",
+  decisionLog: "anna:decisionLog",
+  operatorState: "anna:operatorState"
 };
 
 let transcriptEntries = [];
@@ -232,6 +245,7 @@ let ttsFetchChain = Promise.resolve();
 let bargeInListeningMode = false;
 
 let isAdjustingVolume = false;
+let operatorAutomationTimer = null;
 
 function updateListeningUi() {
   const isActive = persistentListeningEnabled || isListeningNow;
@@ -1101,6 +1115,100 @@ function updateLatestStartupListForUser(mutator, userId = getCurrentUserId()) {
   return next[index];
 }
 
+function ensureTaskInLatestStartupList(title, userId = getCurrentUserId()) {
+  const normalized = normalizeTaskTitle(title);
+  if (!normalized) {
+    return false;
+  }
+
+  const latest = getLatestStartupListForUser(userId);
+  if (!latest) {
+    const next = [...readStartupLists(), { title: "to do", items: [normalized], ts: Date.now(), userId }].slice(-80);
+    writeStartupLists(next);
+    updateTaskEntry(normalized, (current) => ({ ...current, title: normalized }), userId);
+    return true;
+  }
+
+  const currentItems = Array.isArray(latest.items) ? latest.items.map((item) => normalizeTaskTitle(item)).filter(Boolean) : [];
+  if (currentItems.includes(normalized)) {
+    return false;
+  }
+
+  updateLatestStartupListForUser((list) => ({
+    ...list,
+    items: [...currentItems, normalized]
+  }), userId);
+  updateTaskEntry(normalized, (current) => ({ ...current, title: normalized }), userId);
+  return true;
+}
+
+function captureVoiceActionItem(actionText, taskTitle = getCurrentTaskTitle(), userId = getCurrentUserId()) {
+  const action = normalizeTaskTitle(actionText);
+  if (!action) {
+    return false;
+  }
+  const resolvedTask = resolveTaskReference(taskTitle, getCurrentTaskTitle(), userId);
+  if (resolvedTask) {
+    const existing = new Set(readTaskEntry(resolvedTask, userId).subtasks.map((item) => normalizeTaskTitle(item.title)).filter(Boolean));
+    if (existing.has(action)) {
+      return false;
+    }
+    addTaskSubtask(resolvedTask, action, userId);
+    return true;
+  }
+  return ensureTaskInLatestStartupList(action, userId);
+}
+
+function parseOperatorMetaLine(text) {
+  const parts = String(text || "").split(/\s*[|;]\s*/).map((item) => String(item || "").trim()).filter(Boolean);
+  if (!parts.length) {
+    return null;
+  }
+  const fields = { summary: parts[0] };
+  parts.slice(1).forEach((part) => {
+    const match = part.match(/^(owner|why|rationale|follow(?:-|\s)?up|task|milestone|schedule|priority)\s*:\s*(.+)$/i);
+    if (!match) {
+      return;
+    }
+    const key = match[1].toLowerCase().replace(/\s+/g, "").replace("follow-up", "followup").replace("followup", "followUp");
+    fields[key] = match[2].trim();
+  });
+  return fields;
+}
+
+function captureStructuredActionItem(rawText, fallbackTaskTitle = getCurrentTaskTitle(), userId = getCurrentUserId()) {
+  const parsed = parseOperatorMetaLine(rawText);
+  if (!parsed?.summary) {
+    return false;
+  }
+  const targetTitle = normalizeTaskTitle(parsed.task || "") || resolveTaskReference(fallbackTaskTitle, getCurrentTaskTitle(), userId);
+  const created = captureVoiceActionItem(parsed.summary, targetTitle || "", userId);
+  const effectiveTitle = targetTitle || normalizeTaskTitle(parsed.summary);
+  if (!effectiveTitle) {
+    return created;
+  }
+  if (parsed.owner || parsed.priority || parsed.milestone) {
+    setTaskOwnershipState(effectiveTitle, {
+      ownerName: parsed.owner || readTaskEntry(effectiveTitle, userId).ownerName,
+      priority: parsed.priority ? normalizeTaskPriority(parsed.priority) : readTaskEntry(effectiveTitle, userId).priority,
+      milestone: parsed.milestone ? normalizeTaskMilestone(parsed.milestone) : readTaskEntry(effectiveTitle, userId).milestone
+    }, userId);
+  }
+  if (parsed.schedule) {
+    const schedule = parseTaskSchedulePhrase(parsed.schedule);
+    if (schedule) {
+      setTaskPlanningState(effectiveTitle, { ...schedule, scheduledSource: "manual" }, userId);
+    }
+  }
+  if (parsed.followUp) {
+    const reminder = parseTaskReminderPhrase(parsed.followUp);
+    if (reminder) {
+      setTaskReminderState(effectiveTitle, reminder, userId);
+    }
+  }
+  return created;
+}
+
 function findMatchingTaskTitle(text, userId = getCurrentUserId()) {
   const normalized = normalizeBufferedSpeechParts([text]);
   if (!normalized) {
@@ -1136,11 +1244,14 @@ function renameTaskEverywhere(fromTitle, toTitle, userId = getCurrentUserId()) {
     completed: Boolean(existing?.completed ?? current.completed),
     notes: String(existing?.notes || current.notes || ""),
     subtasks: normalizeSubtaskList(existing?.subtasks || current.subtasks),
+    ownerName: normalizeTaskTextField(existing?.ownerName || current.ownerName || "", 120),
     priority: normalizeTaskPriority(existing?.priority ?? current.priority),
     focusLabel: normalizeTaskFocusLabel(existing?.focusLabel || current.focusLabel),
     workflowStatus: normalizeTaskWorkflowStatus(existing?.workflowStatus || current.workflowStatus),
     nextAction: normalizeTaskTextField(existing?.nextAction || current.nextAction || "", 180),
     blocker: normalizeTaskTextField(existing?.blocker || current.blocker || "", 180),
+    blockedAt: Number(existing?.blockedAt ?? current.blockedAt ?? 0) || 0,
+    escalatedAt: Number(existing?.escalatedAt ?? current.escalatedAt ?? 0) || 0,
     progress: normalizeTaskProgress(existing?.progress ?? current.progress),
     sessionStartedAt: Number(existing?.sessionStartedAt ?? current.sessionStartedAt ?? 0) || 0,
     sessionEndsAt: Number(existing?.sessionEndsAt ?? current.sessionEndsAt ?? 0) || 0,
@@ -1782,10 +1893,11 @@ function maybeHandleLocalVoiceCommand(text) {
   const blockedMatch = normalized.match(/(?:i(?:'| a)m|we(?:'| a)re)?\s*blocked(?:\s+on|\s+by|\s+because)?\s+(.+)/) || normalized.match(/(?:block|mark blocked)\s+(?:this|current|the task)?\s*(?:because|for)?\s+(.+)/);
   if (blockedMatch && activeTaskTitle) {
     blockTaskExecution(activeTaskTitle, blockedMatch[1]);
+    const rescue = buildDependencyRescueData(activeTaskTitle);
     refreshTaskViews();
     return {
       handled: true,
-      reply: `got it. ${activeTaskTitle} is blocked on ${normalizeTaskTextField(blockedMatch[1], 180)}.`
+      reply: `got it. ${activeTaskTitle} is blocked on ${normalizeTaskTextField(blockedMatch[1], 180)}.${rescue?.paths?.length ? ` unblock paths: ${rescue.paths.join("; ")}.` : ""}`.trim()
     };
   }
 
@@ -1880,6 +1992,194 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: getOverdueFollowupReply()
+    };
+  }
+
+  const decisionMatch = normalized.match(/(?:log|record|save)\s+(?:the\s+)?decision\s+(.+)/) || normalized.match(/decision\s*[:=-]\s*(.+)/);
+  if (decisionMatch) {
+    const parsedDecision = parseOperatorMetaLine(decisionMatch[1]) || { summary: decisionMatch[1] };
+    if (appendDecisionLog({
+      summary: parsedDecision.summary,
+      taskTitle: normalizeTaskTitle(parsedDecision.task || "") || activeTaskTitle || "",
+      owner: parsedDecision.owner || "",
+      dueLabel: parsedDecision.schedule || "",
+      rationale: parsedDecision.why || parsedDecision.rationale || "",
+      followUp: parsedDecision.followUp || "",
+      source: "voice"
+    })) {
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `saved that decision${activeTaskTitle ? ` for ${activeTaskTitle}` : ""}.`
+      };
+    }
+  }
+
+  const whyDecisionMatch = normalized.match(/why did we choose (?:this|that|it|(.+))/) || normalized.match(/why (?:did|do) we decide (.+)/);
+  if (whyDecisionMatch) {
+    const match = findDecisionLogMatch(whyDecisionMatch[1] || activeTaskTitle || "");
+    if (match) {
+      return {
+        handled: true,
+        reply: match.rationale ? `we chose it because ${match.rationale}.` : `the saved decision is: ${match.summary}.`
+      };
+    }
+  }
+
+  const actionCaptureMatch = normalized.match(/(?:log|capture|save|add)\s+(?:an?\s+)?action\s+(.+)/);
+  if (actionCaptureMatch) {
+    if (captureStructuredActionItem(actionCaptureMatch[1], activeTaskTitle || "")) {
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: activeTaskTitle ? `captured that as the next step on ${activeTaskTitle}.` : "captured that as a task on the board."
+      };
+    }
+  }
+
+  const brainstormMatch = normalized.match(/(?:capture|turn|convert)\s+(?:this\s+)?brainstorm\s+(?:into|to)\s+execution\s+(.+)/) || normalized.match(/brainstorm\s*[:=-]\s*(.+)/);
+  if (brainstormMatch) {
+    const chunks = brainstormMatch[1].split(/\s*(?:,| and | then )\s*/).map((item) => item.trim()).filter(Boolean);
+    let captured = 0;
+    chunks.forEach((chunk) => {
+      if (captureStructuredActionItem(chunk, activeTaskTitle || "")) {
+        captured += 1;
+      }
+    });
+    if (captured) {
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: `turned that brainstorm into ${captured} execution item${captured === 1 ? "" : "s"}.`
+      };
+    }
+  }
+
+  const meetingStartMatch = normalized.match(/(?:start|open|enter|turn on)\s+(?:meeting mode|meeting notes|meeting copilot)(?:\s+(?:for|on)\s+(.+))?/);
+  if (meetingStartMatch) {
+    setMeetingMode(true, meetingStartMatch[1] || activeTaskTitle || "");
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: getMeetingModeSummary()
+    };
+  }
+
+  if (/(?:stop|end|exit|close|turn off)\s+(?:meeting mode|meeting notes|meeting copilot)/.test(normalized)) {
+    setMeetingMode(false);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: "meeting mode is off."
+    };
+  }
+
+  if (/(?:decision log|show decisions|what did we decide|recent decisions)/.test(normalized)) {
+    const decisions = readDecisionLog().slice(0, 4);
+    return {
+      handled: true,
+      reply: decisions.length ? `recent decisions: ${decisions.map((item) => item.summary).join("; ")}.` : "no decisions logged yet."
+    };
+  }
+
+  if (/(?:risk radar|what(?:'s| is) risky|what is at risk|what needs escalation)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: buildRiskRadarReply()
+    };
+  }
+
+  const rescueMatch = normalized.match(/(?:dependency rescue|how do i unblock|rescue|unstick)\s+(.+)/);
+  if (rescueMatch) {
+    return {
+      handled: true,
+      reply: buildDependencyRescueReply(rescueMatch[1])
+    };
+  }
+
+  if (/(?:rescue this|why is this stuck|how do i unblock this|what's blocking this)/.test(normalized) && activeTaskTitle) {
+    return {
+      handled: true,
+      reply: buildDependencyRescueReply(activeTaskTitle)
+    };
+  }
+
+  const escalateMatch = normalized.match(/(?:escalate|stuck task escalation)\s+(.+)/);
+  if (escalateMatch) {
+    return {
+      handled: true,
+      reply: buildStuckTaskEscalationReply(escalateMatch[1])
+    };
+  }
+
+  if (/(?:escalate this|this is stuck)/.test(normalized) && activeTaskTitle) {
+    return {
+      handled: true,
+      reply: buildStuckTaskEscalationReply(activeTaskTitle)
+    };
+  }
+
+  const focusModeMatch = normalized.match(/(?:start|enter|turn on)\s+(?:focus mode|sprint captain)(?:\s+(?:on|for)\s+(.+))?/);
+  if (focusModeMatch) {
+    const focusTarget = resolveTaskReference(focusModeMatch[1] || activeTaskTitle || "", activeTaskTitle);
+    const focusState = focusTarget ? startFocusMode(focusTarget, { minutes: extractOperatorDurationMinutes(normalized, 45) }) : null;
+    if (focusState) {
+      refreshTaskViews();
+      return {
+        handled: true,
+        reply: getFocusModeSummary()
+      };
+    }
+  }
+
+  if (/(?:stop|end|exit|turn off)\s+(?:focus mode|sprint captain)/.test(normalized)) {
+    clearFocusMode();
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: "focus mode is off."
+    };
+  }
+
+  if (/(?:autonomous follow through|follow through on this|own this task|run follow through)/.test(normalized) && activeTaskTitle) {
+    const result = runAutonomousFollowThrough(activeTaskTitle);
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: result ? `locked follow-through on ${result.title}. next is ${result.nextAction}. ${result.reminder !== "no follow-up set" ? `follow-up: ${result.reminder}.` : ""}`.trim() : "i couldn't lock follow-through on that task."
+    };
+  }
+
+  if (/(?:morning brief|opening brief|start my day)/.test(normalized)) {
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: buildMorningBriefReply()
+    };
+  }
+
+  if (/(?:midday reset|midday replan|reset my day)/.test(normalized)) {
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: buildMiddayResetReply()
+    };
+  }
+
+  if (/(?:shutdown review|close out the day|end of day review|day shutdown)/.test(normalized)) {
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: buildShutdownReviewReply()
+    };
+  }
+
+  if (/(?:daily auto replan|auto replan|replan today|reset today|rebalance today)/.test(normalized)) {
+    const result = runDailyAutoReplan("voice command");
+    refreshTaskViews();
+    return {
+      handled: true,
+      reply: `${result.summary}${result.scheduled.length ? ` ${result.scheduled.slice(0, 4).join("; ")}.` : ""}`.trim()
     };
   }
 
@@ -2323,7 +2623,10 @@ const REMOTE_SYNC_JSON_KEYS = new Set([
   STORAGE_KEYS.chatSessions,
   STORAGE_KEYS.startupLists,
   STORAGE_KEYS.taskState,
-  STORAGE_KEYS.activeTask
+  STORAGE_KEYS.activeTask,
+  STORAGE_KEYS.operatorRoadmap,
+  STORAGE_KEYS.decisionLog,
+  STORAGE_KEYS.operatorState
 ]);
 
 function readJson(key, fallback) {
@@ -2416,6 +2719,197 @@ function applyPersistedSnapshot(snapshot) {
   } finally {
     isApplyingRemoteSnapshot = false;
   }
+}
+
+const DEFAULT_OPERATOR_ROADMAP = [
+  ["autonomous-follow-through", "autonomous follow-through", "anna turns loose tasks into next actions, subtasks, and follow-up loops."],
+  ["meeting-mode", "meeting mode", "meeting conversations can capture decisions and actions directly into the app."],
+  ["focus-mode", "focus mode / sprint captain", "anna can lock a sprint, watch drift, and keep the active task moving."],
+  ["dependency-rescue", "dependency rescue", "anna detects blocked chains and suggests the fastest unblock path."],
+  ["risk-radar", "risk radar", "the board surfaces overdue, stale, blocked, and escalation-risk work."],
+  ["daily-auto-replan", "daily auto-replan", "anna can reset today’s plan based on what is actually ready right now."],
+  ["decision-log", "decision log", "important calls are saved with timestamps so they don’t disappear in chat."],
+  ["operating-rituals", "operating rituals", "morning brief, midday reset, and shutdown review are built-in commands."],
+  ["voice-to-execution", "voice-to-execution", "anna can convert action lines from a reply into real tasks or subtasks."],
+  ["stuck-task-escalation", "stuck-task escalation", "high-risk stuck tasks get explicit escalation guidance instead of vague summaries."]
+].map(([key, title, description]) => ({ key, title, description, status: "live" }));
+
+function readOperatorRoadmap() {
+  const saved = readJson(STORAGE_KEYS.operatorRoadmap, []);
+  if (Array.isArray(saved) && saved.length) {
+    return DEFAULT_OPERATOR_ROADMAP.map((item) => {
+      const match = saved.find((savedItem) => String(savedItem?.key || "") === item.key);
+      return {
+        ...item,
+        status: normalizeTaskTextField(match?.status || item.status || "live", 40) || "live"
+      };
+    });
+  }
+  writeJson(STORAGE_KEYS.operatorRoadmap, DEFAULT_OPERATOR_ROADMAP);
+  return DEFAULT_OPERATOR_ROADMAP;
+}
+
+function readDecisionLog(userId = getCurrentUserId()) {
+  const entries = readJson(STORAGE_KEYS.decisionLog, []);
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries
+    .filter((entry) => String(entry?.userId || "") === userId)
+    .map((entry) => ({
+      id: String(entry?.id || "").trim(),
+      summary: normalizeTaskTextField(entry?.summary || "", 220),
+      taskTitle: normalizeTaskTitle(entry?.taskTitle || ""),
+      owner: normalizeTaskTextField(entry?.owner || "", 120),
+      dueLabel: normalizeTaskTextField(entry?.dueLabel || "", 120),
+      rationale: normalizeTaskTextField(entry?.rationale || "", 260),
+      followUp: normalizeTaskTextField(entry?.followUp || "", 180),
+      source: normalizeTaskTextField(entry?.source || "voice", 40),
+      ts: Number(entry?.ts || 0) || 0
+    }))
+    .filter((entry) => entry.summary)
+    .sort((a, b) => (Number(b.ts || 0) || 0) - (Number(a.ts || 0) || 0));
+}
+
+function appendDecisionLog(entry, userId = getCurrentUserId()) {
+  const summary = normalizeTaskTextField(entry?.summary || "", 220);
+  const taskTitle = normalizeTaskTitle(entry?.taskTitle || "");
+  if (!summary) {
+    return false;
+  }
+  if (readDecisionLog(userId).some((item) => item.summary === summary && item.taskTitle === taskTitle)) {
+    return false;
+  }
+  const next = [...readJson(STORAGE_KEYS.decisionLog, []), {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    summary,
+    taskTitle,
+    owner: normalizeTaskTextField(entry?.owner || "", 120),
+    dueLabel: normalizeTaskTextField(entry?.dueLabel || "", 120),
+    rationale: normalizeTaskTextField(entry?.rationale || "", 260),
+    followUp: normalizeTaskTextField(entry?.followUp || "", 180),
+    source: normalizeTaskTextField(entry?.source || "voice", 40) || "voice",
+    ts: Date.now(),
+    userId
+  }].slice(-120);
+  writeJson(STORAGE_KEYS.decisionLog, next);
+  return true;
+}
+
+function readOperatorState(userId = getCurrentUserId()) {
+  const store = readJson(STORAGE_KEYS.operatorState, {});
+  const state = store && typeof store[userId] === "object" ? store[userId] : {};
+  return {
+    meetingActive: Boolean(state.meetingActive),
+    meetingTopic: normalizeTaskTextField(state.meetingTopic || "", 120),
+    meetingStartedAt: Number(state.meetingStartedAt || 0) || 0,
+    focusTaskTitle: normalizeTaskTitle(state.focusTaskTitle || ""),
+    focusStartedAt: Number(state.focusStartedAt || 0) || 0,
+    focusEndsAt: Number(state.focusEndsAt || 0) || 0,
+    lastFocusNudgeAt: Number(state.lastFocusNudgeAt || 0) || 0,
+    lastAutoReplanAt: Number(state.lastAutoReplanAt || 0) || 0,
+    ritualLog: Array.isArray(state.ritualLog)
+      ? state.ritualLog
+          .map((item) => ({
+            kind: normalizeTaskTextField(item?.kind || "", 40),
+            note: normalizeTaskTextField(item?.note || "", 220),
+            ts: Number(item?.ts || 0) || 0
+          }))
+          .filter((item) => item.kind)
+          .slice(-18)
+      : []
+  };
+}
+
+function writeOperatorStateForUser(nextState, userId = getCurrentUserId()) {
+  const store = readJson(STORAGE_KEYS.operatorState, {});
+  const current = readOperatorState(userId);
+  store[userId] = {
+    ...current,
+    ...nextState,
+    ritualLog: Array.isArray(nextState?.ritualLog) ? nextState.ritualLog.slice(-18) : current.ritualLog
+  };
+  writeJson(STORAGE_KEYS.operatorState, store);
+  return store[userId];
+}
+
+function updateOperatorState(mutator, userId = getCurrentUserId()) {
+  const current = readOperatorState(userId);
+  return writeOperatorStateForUser(typeof mutator === "function" ? mutator(current) : mutator, userId);
+}
+
+function recordOperatorRitual(kind, note = "", userId = getCurrentUserId()) {
+  return updateOperatorState((current) => ({
+    ...current,
+    ritualLog: [...(current.ritualLog || []), {
+      kind: normalizeTaskTextField(kind || "ritual", 40),
+      note: normalizeTaskTextField(note || "", 220),
+      ts: Date.now()
+    }].slice(-18)
+  }), userId);
+}
+
+function setMeetingMode(active, topic = "", userId = getCurrentUserId()) {
+  return updateOperatorState((current) => ({
+    ...current,
+    meetingActive: Boolean(active),
+    meetingTopic: active ? normalizeTaskTextField(topic || current.meetingTopic || "", 120) : "",
+    meetingStartedAt: active ? Date.now() : 0
+  }), userId);
+}
+
+function startFocusMode(taskTitle, options = {}, userId = getCurrentUserId()) {
+  const resolvedTitle = resolveTaskReference(taskTitle, getCurrentTaskTitle(), userId);
+  if (!resolvedTitle) {
+    return null;
+  }
+  const minutes = Math.max(15, Math.min(120, Number(options.minutes || 45) || 45));
+  startTaskWorkSession(resolvedTitle, { minutes }, userId);
+  return updateOperatorState((current) => ({
+    ...current,
+    focusTaskTitle: resolvedTitle,
+    focusStartedAt: Date.now(),
+    focusEndsAt: Date.now() + minutes * 60 * 1000,
+    lastFocusNudgeAt: Date.now()
+  }), userId);
+}
+
+function clearFocusMode(userId = getCurrentUserId()) {
+  return updateOperatorState((current) => ({
+    ...current,
+    focusTaskTitle: "",
+    focusStartedAt: 0,
+    focusEndsAt: 0,
+    lastFocusNudgeAt: 0
+  }), userId);
+}
+
+function getMeetingModeSummary(userId = getCurrentUserId()) {
+  const state = readOperatorState(userId);
+  if (!state.meetingActive) {
+    return "meeting mode is off.";
+  }
+  return `meeting mode is live${state.meetingTopic ? ` on ${state.meetingTopic}` : ""}. anna will capture decisions and actions.`;
+}
+
+function getFocusModeSummary(userId = getCurrentUserId()) {
+  const state = readOperatorState(userId);
+  if (!state.focusTaskTitle || !state.focusEndsAt || state.focusEndsAt <= Date.now()) {
+    return "focus mode is off.";
+  }
+  return `focus mode is on ${state.focusTaskTitle} until ${new Date(state.focusEndsAt).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  })}.`;
+}
+
+function extractOperatorDurationMinutes(text, fallback = 45) {
+  const match = String(text || "").match(/(\d{1,3})\s*(?:m|min|mins|minute|minutes|h|hr|hrs|hour|hours)\b/);
+  if (!match) {
+    return fallback;
+  }
+  const amount = Number(match[1] || 0) || fallback;
+  return /\b(?:h|hr|hrs|hour|hours)\b/.test(match[0]) ? amount * 60 : amount;
 }
 
 async function initSupabaseClient() {
@@ -4036,8 +4530,351 @@ function clearAutoTodayPlan(userId = getCurrentUserId(), dayOffset = 0) {
   return cleared;
 }
 
+function buildRiskSignals(entry, userId = getCurrentUserId()) {
+  if (!entry || entry.completed) {
+    return [];
+  }
+  const now = Date.now();
+  const signals = [];
+  const dependencyState = getTaskDependencyState(entry, userId);
+  if (normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked") {
+    signals.push({ severity: 3, text: entry.blocker ? `blocked by ${entry.blocker}` : "blocked" });
+  }
+  if (Number(entry.blockedAt || 0) && now - Number(entry.blockedAt) >= 12 * 60 * 60 * 1000) {
+    signals.push({ severity: 3, text: `blocked too long ${formatRelativeTime(now - Number(entry.blockedAt))}` });
+  }
+  if (dependencyState.blocking.length) {
+    signals.push({ severity: 3, text: `waiting on ${dependencyState.blocking.slice(0, 2).join(", ")}` });
+  }
+  if (Number(entry.dueAt || 0) && Number(entry.dueAt) < now) {
+    signals.push({ severity: 3, text: `overdue ${formatTaskDueLabel(entry.dueAt, entry.dueLabel)}` });
+  }
+  if (isTaskReminderOverdue(entry)) {
+    signals.push({ severity: 2, text: `follow-up overdue ${formatTaskReminderSummary(entry)}` });
+  }
+  if ((normalizeTaskPriority(entry.priority) === "top" || normalizeTaskPriority(entry.priority) === "high") && !entry.nextAction) {
+    signals.push({ severity: 2, text: "missing next move" });
+  }
+  if (getTaskNextActionText(entry) === "define the very next move") {
+    signals.push({ severity: 2, text: "weak next move" });
+  }
+  if (getTaskProgressValue(entry) <= 10 && !entry.subtasks.length && now - Number(entry.updatedAt || 0) >= 24 * 60 * 60 * 1000) {
+    signals.push({ severity: 2, text: "low progress signal" });
+  }
+  if (!Number(entry.scheduledAt || 0) && Number(entry.dueAt || 0) && Number(entry.dueAt) <= now + 36 * 60 * 60 * 1000) {
+    signals.push({ severity: 2, text: "due soon without a slot" });
+  }
+  if (Number(entry.updatedAt || 0) && now - Number(entry.updatedAt) >= 48 * 60 * 60 * 1000) {
+    signals.push({ severity: 1, text: `stale ${formatRelativeTime(now - Number(entry.updatedAt))}` });
+  }
+  return signals;
+}
+
+function getDependencyUnlockSequence(taskTitle, userId = getCurrentUserId(), seen = new Set()) {
+  const resolvedTitle = resolveTaskReference(taskTitle, taskTitle, userId);
+  if (!resolvedTitle || seen.has(resolvedTitle)) {
+    return [];
+  }
+  seen.add(resolvedTitle);
+  const entry = readTaskEntry(resolvedTitle, userId);
+  const directDependencies = normalizeTaskDependencyList(entry.dependsOn);
+  const sequence = [];
+  directDependencies.forEach((dependencyTitle) => {
+    getDependencyUnlockSequence(dependencyTitle, userId, seen).forEach((item) => {
+      if (!sequence.includes(item)) {
+        sequence.push(item);
+      }
+    });
+    if (!sequence.includes(dependencyTitle)) {
+      sequence.push(dependencyTitle);
+    }
+  });
+  if (!sequence.includes(resolvedTitle)) {
+    sequence.push(resolvedTitle);
+  }
+  return sequence;
+}
+
+function buildBlockedRescuePaths(entry, userId = getCurrentUserId()) {
+  if (!entry) {
+    return [];
+  }
+  const paths = [];
+  const unlockSequence = getDependencyUnlockSequence(entry.title, userId).filter((title) => title !== entry.title);
+  if (unlockSequence.length) {
+    paths.push(`clear the chain in order: ${unlockSequence.slice(0, 4).join(" → ")} → ${entry.title}`);
+  }
+  if (entry.blocker) {
+    paths.push(`resolve the blocker owner for ${entry.title} and turn it into one concrete next move`);
+  }
+  const nextAction = getTaskNextActionText(entry);
+  if (nextAction && nextAction !== "define the very next move") {
+    paths.push(`if the blocker is soft, bypass it by pushing ${nextAction} now`);
+  }
+  if (!Number(entry.scheduledAt || 0)) {
+    paths.push(`protect recovery time by forcing ${entry.title} into today’s plan once unblocked`);
+  }
+  return paths.slice(0, 3);
+}
+
+function getRiskRadarData(userId = getCurrentUserId()) {
+  const risky = getTaskEntriesForUser(userId)
+    .filter((entry) => !entry.completed)
+    .map((entry) => {
+      const signals = buildRiskSignals(entry, userId);
+      return {
+        title: entry.title,
+        next: getTaskNextActionText(entry),
+        signals,
+        severity: signals.reduce((max, item) => Math.max(max, item.severity), 0)
+      };
+    })
+    .filter((entry) => entry.signals.length)
+    .sort((a, b) => b.severity - a.severity || b.signals.length - a.signals.length || a.title.localeCompare(b.title));
+  const escalations = risky.filter((item) => item.severity >= 3);
+  return {
+    summary: !risky.length
+      ? "board is clean right now — no active escalation risk."
+      : `${risky.length} task${risky.length === 1 ? " is" : "s are"} flashing risk and ${escalations.length} need escalation-level attention.`,
+    risky: risky.slice(0, 6),
+    escalations: escalations.slice(0, 4)
+  };
+}
+
+function buildRiskRadarReply(userId = getCurrentUserId()) {
+  const radar = getRiskRadarData(userId);
+  if (!radar.risky.length) {
+    return radar.summary;
+  }
+  const lines = radar.risky.slice(0, 4).map((item) => `${item.title}: ${item.signals.slice(0, 2).map((signal) => signal.text).join(" · ")}`).join("; ");
+  return `${radar.summary} ${lines}.`.trim();
+}
+
+function buildDependencyRescueData(taskTitle, userId = getCurrentUserId()) {
+  const resolvedTitle = resolveTaskReference(taskTitle, getCurrentTaskTitle(), userId);
+  if (!resolvedTitle) {
+    return null;
+  }
+  const entry = readTaskEntry(resolvedTitle, userId);
+  const dependencyState = getTaskDependencyState(entry, userId);
+  const unlockSequence = getDependencyUnlockSequence(resolvedTitle, userId);
+  const actions = [];
+  if (entry.blocker) {
+    actions.push(`clear the blocker owner for ${resolvedTitle} and convert it into a next move`);
+  }
+  dependencyState.blocking.slice(0, 3).forEach((dependencyTitle) => {
+    const dependencyEntry = readTaskEntry(dependencyTitle, userId);
+    actions.push(`unlock ${dependencyTitle} first${dependencyEntry.nextAction ? ` by doing ${dependencyEntry.nextAction}` : ""}`);
+  });
+  if (!entry.nextAction) {
+    actions.push(`set a concrete next move for ${resolvedTitle}`);
+  }
+  if (!Number(entry.scheduledAt || 0) && normalizeTaskWorkflowStatus(entry.workflowStatus) !== "blocked") {
+    actions.push(`slot ${resolvedTitle} onto today’s plan once it is unblocked`);
+  }
+  return {
+    title: resolvedTitle,
+    dependencySummary: buildTaskDependencySummary(entry, userId) || (entry.blocker ? `blocked by ${entry.blocker}` : "no hard blocker"),
+    actions: actions.slice(0, 4),
+    unlockSequence,
+    paths: buildBlockedRescuePaths(entry, userId)
+  };
+}
+
+function buildDependencyRescueReply(taskTitle, userId = getCurrentUserId()) {
+  const data = buildDependencyRescueData(taskTitle, userId);
+  if (!data) {
+    return "i couldn't find that task to rescue.";
+  }
+  if (!data.actions.length) {
+    return `${data.title} looks unblocked. next move is ${getTaskNextActionText(readTaskEntry(data.title, userId))}.`;
+  }
+  const pathText = data.paths.length ? ` unblock paths: ${data.paths.join("; ")}.` : "";
+  const chainText = data.unlockSequence.length > 1 ? ` unlock order: ${data.unlockSequence.join(" → ")}.` : "";
+  return `${data.title}: ${data.dependencySummary}. rescue path: ${data.actions.join("; ")}.${chainText}${pathText}`.trim();
+}
+
+function promoteTaskToMustResolveToday(taskTitle, userId = getCurrentUserId()) {
+  const resolvedTitle = resolveTaskReference(taskTitle, getCurrentTaskTitle(), userId);
+  if (!resolvedTitle) {
+    return null;
+  }
+  const current = readTaskEntry(resolvedTitle, userId);
+  const schedule = parseTaskSchedulePhrase("today afternoon") || parseTaskSchedulePhrase("tomorrow morning");
+  setTaskOwnershipState(resolvedTitle, {
+    priority: "top",
+    focusLabel: "today",
+    dueAt: getTodayPlanningWindow(0).end,
+    dueLabel: "today",
+    scheduledAt: schedule?.scheduledAt || current.scheduledAt,
+    scheduledLabel: schedule?.scheduledLabel || current.scheduledLabel,
+    scheduledSource: schedule?.scheduledAt ? "manual" : current.scheduledSource
+  }, userId);
+  setTaskExecutionState(resolvedTitle, {
+    escalatedAt: current.escalatedAt || Date.now()
+  }, userId);
+  return readTaskEntry(resolvedTitle, userId);
+}
+
+function buildStuckTaskEscalationReply(taskTitle, userId = getCurrentUserId()) {
+  const resolvedTitle = resolveTaskReference(taskTitle, getCurrentTaskTitle(), userId);
+  if (!resolvedTitle) {
+    return "i couldn't find that stuck task.";
+  }
+  const entry = readTaskEntry(resolvedTitle, userId);
+  const signals = buildRiskSignals(entry, userId);
+  if (!signals.length) {
+    return `${resolvedTitle} is moving — no escalation needed right now.`;
+  }
+  const promoted = promoteTaskToMustResolveToday(resolvedTitle, userId);
+  const rescue = buildDependencyRescueData(resolvedTitle, userId);
+  return `${resolvedTitle} needs escalation because ${signals.slice(0, 3).map((item) => item.text).join(" · ")}. it is now marked must resolve today${promoted?.scheduledAt ? ` and slotted ${formatTaskScheduleLabel(promoted.scheduledAt, promoted.scheduledLabel)}` : ""}. escalate by ${rescue?.actions?.[0] || "forcing a concrete owner and deadline on the blocker"}.`;
+}
+
+function runAutonomousFollowThrough(taskTitle, userId = getCurrentUserId()) {
+  const resolvedTitle = resolveTaskReference(taskTitle, getCurrentTaskTitle(), userId);
+  if (!resolvedTitle) {
+    return null;
+  }
+  const current = readTaskEntry(resolvedTitle, userId);
+  if (!current.subtasks.length) {
+    buildLocalTaskExecutionPlan(resolvedTitle);
+  }
+  const afterPlan = readTaskEntry(resolvedTitle, userId);
+  if (!afterPlan.reminderAt && !afterPlan.reminderCadence) {
+    const reminder = parseTaskReminderPhrase("tomorrow morning") || parseTaskReminderPhrase("in 2 hours");
+    if (reminder) {
+      setTaskReminderState(resolvedTitle, reminder, userId);
+    }
+  }
+  if (!afterPlan.scheduledAt && normalizeTaskWorkflowStatus(afterPlan.workflowStatus) !== "blocked") {
+    const slot = parseTaskSchedulePhrase("today afternoon") || parseTaskSchedulePhrase("tomorrow morning");
+    if (slot) {
+      setTaskPlanningState(resolvedTitle, { ...slot, scheduledSource: "manual" }, userId);
+    }
+  }
+  recordOperatorRitual("follow-through", resolvedTitle, userId);
+  return {
+    title: resolvedTitle,
+    nextAction: getTaskNextActionText(readTaskEntry(resolvedTitle, userId)),
+    reminder: formatTaskReminderSummary(readTaskEntry(resolvedTitle, userId))
+  };
+}
+
+function runDailyAutoReplan(reason = "manual", userId = getCurrentUserId()) {
+  clearAutoTodayPlan(userId);
+  const result = buildAutoTodayPlan(userId);
+  updateOperatorState((current) => ({
+    ...current,
+    lastAutoReplanAt: Date.now()
+  }), userId);
+  recordOperatorRitual("auto-replan", reason, userId);
+  return result;
+}
+
+function buildMorningBriefReply(userId = getCurrentUserId()) {
+  const replan = runDailyAutoReplan("morning brief", userId);
+  const briefing = getDailyBriefingData(userId);
+  const risk = getRiskRadarData(userId);
+  return `${briefing.summary} ${replan.summary}${risk.risky.length ? ` biggest risk: ${risk.risky[0].title} (${risk.risky[0].signals[0].text}).` : ""}`.trim();
+}
+
+function buildMiddayResetReply(userId = getCurrentUserId()) {
+  const replan = runDailyAutoReplan("midday reset", userId);
+  const risk = getRiskRadarData(userId);
+  return `${replan.summary}${risk.risky.length ? ` midday risks: ${risk.risky.slice(0, 2).map((item) => item.title).join(", ")}.` : " board still looks clean."}`.trim();
+}
+
+function buildShutdownReviewReply(userId = getCurrentUserId()) {
+  const tomorrow = getTomorrowPlanData(userId);
+  const review = getWeeklyReviewData(userId);
+  recordOperatorRitual("shutdown review", tomorrow.summary, userId);
+  return `${tomorrow.summary}${review.slips.length ? ` watch ${review.slips[0].title} first tomorrow.` : ""}`.trim();
+}
+
+function findDecisionLogMatch(referenceText = "", userId = getCurrentUserId()) {
+  const cleaned = normalizeBufferedSpeechParts([referenceText]);
+  const activeTitle = getCurrentTaskTitle();
+  const decisions = readDecisionLog(userId);
+  if (activeTitle) {
+    const taskMatch = decisions.find((entry) => entry.taskTitle === activeTitle && (!cleaned || entry.summary.includes(cleaned) || cleaned.includes(entry.summary)));
+    if (taskMatch) {
+      return taskMatch;
+    }
+  }
+  return decisions.find((entry) => entry.summary.includes(cleaned) || cleaned.includes(entry.summary) || (entry.taskTitle && cleaned.includes(entry.taskTitle))) || null;
+}
+
+function maybeRunAutomaticMorningReplan(userId = getCurrentUserId()) {
+  const state = readOperatorState(userId);
+  const now = Date.now();
+  const last = Number(state.lastAutoReplanAt || 0) || 0;
+  const nowDate = new Date(now);
+  const lastDate = last ? new Date(last) : null;
+  const sameDay = lastDate && nowDate.getFullYear() === lastDate.getFullYear() && nowDate.getMonth() === lastDate.getMonth() && nowDate.getDate() === lastDate.getDate();
+  if (sameDay || nowDate.getHours() < 5) {
+    return false;
+  }
+  runDailyAutoReplan("automatic morning replan", userId);
+  return true;
+}
+
+function maybePromoteLongBlockedTasks(userId = getCurrentUserId()) {
+  const now = Date.now();
+  let changed = 0;
+  getTaskEntriesForUser(userId)
+    .filter((entry) => !entry.completed)
+    .filter((entry) => normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked")
+    .filter((entry) => Number(entry.blockedAt || 0) && now - Number(entry.blockedAt) >= 12 * 60 * 60 * 1000)
+    .filter((entry) => !Number(entry.escalatedAt || 0))
+    .forEach((entry) => {
+      if (promoteTaskToMustResolveToday(entry.title, userId)) {
+        changed += 1;
+      }
+    });
+  return changed;
+}
+
+function runFocusModeDriftCheck(userId = getCurrentUserId()) {
+  const state = readOperatorState(userId);
+  if (!state.focusTaskTitle) {
+    return false;
+  }
+  if (state.focusEndsAt && state.focusEndsAt <= Date.now()) {
+    clearFocusMode(userId);
+    return true;
+  }
+  const currentTask = getCurrentTaskTitle();
+  const focusedTask = readTaskEntry(state.focusTaskTitle, userId);
+  const nudgeDue = !state.lastFocusNudgeAt || Date.now() - state.lastFocusNudgeAt >= 8 * 60 * 1000;
+  const drifted = currentTask && currentTask !== state.focusTaskTitle;
+  if (!nudgeDue) {
+    return false;
+  }
+  const nextMove = getTaskNextActionText(focusedTask);
+  const message = drifted
+    ? `focus check: get back on ${state.focusTaskTitle}. next is ${nextMove}.`
+    : `sprint captain: stay on ${state.focusTaskTitle}. next move is ${nextMove}.`;
+  showInlineVoiceStatus(message, 4200, { state: "info" });
+  updateOperatorState((current) => ({
+    ...current,
+    lastFocusNudgeAt: Date.now()
+  }), userId);
+  return true;
+}
+
+function maybeRunOperatorAutomation(userId = getCurrentUserId()) {
+  const morningChanged = maybeRunAutomaticMorningReplan(userId);
+  const escalated = maybePromoteLongBlockedTasks(userId);
+  return Boolean(morningChanged || escalated);
+}
+
 function buildTaskOwnershipParts(entry) {
   const parts = [];
+  const ownerName = normalizeTaskTextField(entry?.ownerName || "", 120);
+  if (ownerName) {
+    parts.push(`owner ${ownerName}`);
+  }
   const priority = normalizeTaskPriority(entry?.priority);
   if (priority === "top") {
     parts.push("top priority");
@@ -4127,12 +4964,15 @@ function readTaskEntry(title, userId = getCurrentUserId()) {
     completed: Boolean(entry.completed),
     notes: String(entry.notes || ""),
     subtasks: normalizeSubtaskList(entry.subtasks),
+    ownerName: normalizeTaskTextField(entry.ownerName || "", 120),
     priority: normalizeTaskPriority(entry.priority),
     focusLabel: normalizeTaskFocusLabel(entry.focusLabel),
     milestone: normalizeTaskMilestone(entry.milestone),
     workflowStatus: normalizeTaskWorkflowStatus(entry.workflowStatus || (entry.completed ? "done" : "queued")),
     nextAction: normalizeTaskTextField(entry.nextAction || "", 180),
     blocker: normalizeTaskTextField(entry.blocker || "", 180),
+    blockedAt: Number(entry.blockedAt || 0) || 0,
+    escalatedAt: Number(entry.escalatedAt || 0) || 0,
     progress: normalizeTaskProgress(entry.progress),
     sessionStartedAt: Number(entry.sessionStartedAt || 0) || 0,
     sessionEndsAt: Number(entry.sessionEndsAt || 0) || 0,
@@ -4167,12 +5007,15 @@ function updateTaskEntry(title, updater, userId = getCurrentUserId()) {
     completed: Boolean(nextValue?.completed),
     notes: String(nextValue?.notes || ""),
     subtasks: normalizeSubtaskList(nextValue?.subtasks),
+    ownerName: normalizeTaskTextField(nextValue?.ownerName || "", 120),
     priority: normalizeTaskPriority(nextValue?.priority),
     focusLabel: normalizeTaskFocusLabel(nextValue?.focusLabel),
     milestone: normalizeTaskMilestone(nextValue?.milestone),
     workflowStatus: normalizeTaskWorkflowStatus(nextValue?.workflowStatus || (nextValue?.completed ? "done" : "queued")),
     nextAction: normalizeTaskTextField(nextValue?.nextAction || "", 180),
     blocker: normalizeTaskTextField(nextValue?.blocker || "", 180),
+    blockedAt: Number(nextValue?.blockedAt || 0) || 0,
+    escalatedAt: Number(nextValue?.escalatedAt || 0) || 0,
     progress: normalizeTaskProgress(nextValue?.progress),
     sessionStartedAt: Number(nextValue?.sessionStartedAt || 0) || 0,
     sessionEndsAt: Number(nextValue?.sessionEndsAt || 0) || 0,
@@ -4231,6 +5074,7 @@ function setTaskOwnershipState(title, fields, userId = getCurrentUserId()) {
     (current) => ({
       ...current,
       ...fields,
+      ownerName: fields?.ownerName ?? current.ownerName,
       priority: fields?.priority ?? current.priority,
       focusLabel: fields?.focusLabel ?? current.focusLabel,
       milestone: fields?.milestone ?? current.milestone,
@@ -4274,6 +5118,8 @@ function setTaskExecutionState(title, fields, userId = getCurrentUserId()) {
       workflowStatus: fields?.workflowStatus ?? current.workflowStatus,
       nextAction: fields?.nextAction ?? current.nextAction,
       blocker: fields?.blocker ?? current.blocker,
+      blockedAt: fields?.blockedAt ?? current.blockedAt,
+      escalatedAt: fields?.escalatedAt ?? current.escalatedAt,
       progress: fields?.progress ?? current.progress,
       sessionStartedAt: fields?.sessionStartedAt ?? current.sessionStartedAt,
       sessionEndsAt: fields?.sessionEndsAt ?? current.sessionEndsAt,
@@ -4397,6 +5243,7 @@ function startTaskWorkSession(title, options = {}, userId = getCurrentUserId()) 
   return setTaskExecutionState(title, {
     workflowStatus: current.completed ? "done" : "active",
     blocker: "",
+    blockedAt: 0,
     nextAction: normalizeTaskTextField(options.nextAction || current.nextAction || getTaskNextActionText(current), 180),
     progress: current.completed ? 100 : Math.max(getTaskProgressValue(current), 5),
     sessionStartedAt: now,
@@ -4409,7 +5256,8 @@ function pauseTaskExecution(title, userId = getCurrentUserId()) {
   return setTaskExecutionState(title, {
     workflowStatus: current.completed ? "done" : "paused",
     sessionStartedAt: 0,
-    sessionEndsAt: 0
+    sessionEndsAt: 0,
+    blockedAt: current.blockedAt
   }, userId);
 }
 
@@ -4418,6 +5266,7 @@ function blockTaskExecution(title, blocker, userId = getCurrentUserId()) {
   return setTaskExecutionState(title, {
     workflowStatus: current.completed ? "done" : "blocked",
     blocker: normalizeTaskTextField(blocker || current.blocker || "waiting on input", 180),
+    blockedAt: current.blockedAt || Date.now(),
     sessionStartedAt: 0,
     sessionEndsAt: 0
   }, userId);
@@ -4427,6 +5276,7 @@ function clearTaskBlocker(title, userId = getCurrentUserId()) {
   const current = readTaskEntry(title, userId);
   return setTaskExecutionState(title, {
     blocker: "",
+    blockedAt: 0,
     workflowStatus: current.completed ? "done" : current.sessionEndsAt > Date.now() ? "active" : "queued"
   }, userId);
 }
@@ -4976,6 +5826,10 @@ function buildMessagesForApi() {
   const tomorrowPlanSummary = buildTomorrowPlanReply(currentUserId);
   const standupSummary = buildBoardStandupReply(currentUserId);
   const timelineSummary = getBoardTimelineData(currentUserId, 4).map((item) => `- ${item.title} · ${item.kind} · ${formatRelativeTime(Date.now() - item.ts)} · ${item.detail}`).join("\n");
+  const riskRadarSummary = buildRiskRadarReply(currentUserId);
+  const operatorState = readOperatorState(currentUserId);
+  const decisionLog = readDecisionLog(currentUserId).slice(0, 6);
+  const roadmapSummary = readOperatorRoadmap().map((item) => `${item.title} (${item.status})`).join("; ");
   const activeTaskState = activeTask?.title ? readTaskEntry(activeTask.title, currentUserId) : null;
   const activeTaskNotes = String(activeTaskState?.notes || "").trim();
   const activeSubtasks = Array.isArray(activeTaskState?.subtasks)
@@ -5029,7 +5883,7 @@ function buildMessagesForApi() {
   if (getCurrentPageLabel() === "task") {
     sysParts.push("the user is currently inside the task workspace for the active task above. default to helping with that task and do not ask which task they mean unless they explicitly name a different one.");
     sysParts.push("for task help, keep replies short by default, usually 1 to 3 sentences or a tight bullet list. only go long when the user asks for detail or the problem genuinely needs it.");
-    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', 'progress:', 'reminder:', 'milestone:', or 'schedule:' and the app will save them.");
+    sysParts.push("if you suggest concrete next steps for the active task, prefer a short bullet list so the app can turn them into subtasks. if you want to save structured task state, you may include lines that start with 'notes:', 'next:', 'blocker:', 'status:', 'progress:', 'reminder:', 'milestone:', 'schedule:', 'decision:', 'action:', 'task:', or 'focus:' and the app will save them.");
   }
   sysParts.push("for normal conversation, keep replies tight by default: usually 1 to 3 short sentences unless the user explicitly asks for depth.");
   sysParts.push("if the user greets you or checks in without giving direction, respond proactively using their current task board or to-do list. suggest 1 to 3 concrete next moves or ask them to pick one. do not give a generic greeting with no direction.");
@@ -5057,8 +5911,23 @@ function buildMessagesForApi() {
   if (standupSummary) {
     sysParts.push(`daily standup: ${standupSummary}`);
   }
+  if (riskRadarSummary) {
+    sysParts.push(`risk radar: ${riskRadarSummary}`);
+  }
   if (timelineSummary) {
     sysParts.push("recent board timeline:\n" + timelineSummary);
+  }
+  if (roadmapSummary) {
+    sysParts.push(`operator roadmap live in app: ${roadmapSummary}`);
+  }
+  if (operatorState.meetingActive) {
+    sysParts.push(`meeting mode is active${operatorState.meetingTopic ? ` for ${operatorState.meetingTopic}` : ""}. when you identify a decision, include a line starting with 'decision:' and you may append metadata like '| why: ... | owner: ... | follow-up: ...'. when you identify a concrete follow-up, include one or more lines starting with 'action:' and you may append '| owner: ... | milestone: ... | schedule: ... | follow-up: ...'. use 'task:' when a brainstorm item should become a brand new board task. keep meeting replies crisp and operator-like.`);
+  }
+  if (operatorState.focusTaskTitle && operatorState.focusEndsAt > Date.now()) {
+    sysParts.push(`focus mode is active on ${operatorState.focusTaskTitle} until ${new Date(operatorState.focusEndsAt).toISOString()}. optimize for momentum on that task and call out drift if the user is wandering.`);
+  }
+  if (decisionLog.length) {
+    sysParts.push("recent decisions:\n" + decisionLog.map((item) => `- ${item.summary}${item.taskTitle ? ` · ${item.taskTitle}` : ""}`).join("\n"));
   }
   if (activeTaskNotes) {
     sysParts.push(`active task notes:\n${activeTaskNotes.slice(0, 900)}`);
@@ -5390,6 +6259,66 @@ function maybeApplyTaskWorkspaceSuggestionsFromAnna(text) {
   }
 }
 
+function maybeApplyOperatorSuggestionsFromAnna(text) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) {
+    return;
+  }
+
+  const activeTitle = getCurrentTaskTitle();
+  let changed = false;
+
+  Array.from(cleaned.matchAll(/(?:^|\n)decision:\s*(.{1,220})/gi)).forEach((match) => {
+    const parsedDecision = parseOperatorMetaLine(match[1]) || { summary: match[1] };
+    if (appendDecisionLog({
+      summary: parsedDecision.summary,
+      taskTitle: normalizeTaskTitle(parsedDecision.task || "") || activeTitle || "",
+      owner: parsedDecision.owner || "",
+      dueLabel: parsedDecision.schedule || "",
+      rationale: parsedDecision.why || parsedDecision.rationale || "",
+      followUp: parsedDecision.followUp || "",
+      source: "anna"
+    })) {
+      changed = true;
+    }
+  });
+
+  Array.from(cleaned.matchAll(/(?:^|\n)action:\s*(.{1,220})/gi)).forEach((match) => {
+    if (captureStructuredActionItem(match[1], activeTitle || "")) {
+      changed = true;
+    }
+  });
+
+  Array.from(cleaned.matchAll(/(?:^|\n)task:\s*(.{1,220})/gi)).forEach((match) => {
+    if (captureStructuredActionItem(match[1], "")) {
+      changed = true;
+    }
+  });
+
+  const followupMatch = cleaned.match(/(?:^|\n)follow(?:-|\s)?up:\s*(.{1,160})/i);
+  if (followupMatch && activeTitle) {
+    const parsedReminder = parseTaskReminderPhrase(followupMatch[1]);
+    if (parsedReminder) {
+      setTaskReminderState(activeTitle, parsedReminder);
+      changed = true;
+    }
+  }
+
+  const focusMatch = cleaned.match(/(?:^|\n)focus:\s*(?:on\s+)?(.{1,160})/i);
+  if (focusMatch) {
+    const focusTarget = resolveTaskReference(focusMatch[1], activeTitle || "");
+    if (focusTarget) {
+      startFocusMode(focusTarget, { minutes: 45 });
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    renderTaskWorkspace();
+    renderStartupDashboard();
+  }
+}
+
 function readStartupLists() {
   const lists = readJson(STORAGE_KEYS.startupLists, []);
   return Array.isArray(lists) ? lists : [];
@@ -5448,7 +6377,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupWeeklyReviewSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupWeeklyReviewSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary && !startupRoadmapSummary && !startupRiskSummary && !startupMeetingSummary) {
     return;
   }
 
@@ -5463,6 +6392,9 @@ function renderStartupDashboard() {
   const tomorrowPlan = getTomorrowPlanData(userId);
   const standup = getBoardStandupData(userId);
   const timeline = getBoardTimelineData(userId, 6);
+  const roadmap = readOperatorRoadmap();
+  const riskRadar = getRiskRadarData(userId);
+  const decisions = readDecisionLog(userId).slice(0, 4);
 
   if (projectsLeftEl) {
     projectsLeftEl.textContent = String(remainingCount);
@@ -5696,6 +6628,124 @@ function renderStartupDashboard() {
       });
     }
   }
+  if (startupRoadmapSummary) {
+    startupRoadmapSummary.textContent = `${roadmap.length} operator systems are now live in anna.`;
+  }
+  if (startupRoadmapList) {
+    startupRoadmapList.innerHTML = "";
+    roadmap.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "startup-ops-item";
+
+      const head = document.createElement("div");
+      head.className = "startup-ops-head";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "startup-ops-title";
+      titleEl.textContent = item.title;
+
+      const statusEl = document.createElement("div");
+      statusEl.className = "startup-ops-status";
+      statusEl.textContent = item.status;
+
+      const copy = document.createElement("div");
+      copy.className = "startup-ops-copy";
+      copy.textContent = item.description;
+
+      head.appendChild(titleEl);
+      head.appendChild(statusEl);
+      row.appendChild(head);
+      row.appendChild(copy);
+      startupRoadmapList.appendChild(row);
+    });
+  }
+  if (startupRiskSummary) {
+    startupRiskSummary.textContent = riskRadar.summary;
+  }
+  if (startupRiskList) {
+    startupRiskList.innerHTML = "";
+    if (!riskRadar.risky.length) {
+      const empty = document.createElement("div");
+      empty.className = "startup-ops-item";
+      empty.textContent = "no open risk spikes right now.";
+      startupRiskList.appendChild(empty);
+    } else {
+      riskRadar.risky.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "startup-ops-item";
+
+        const head = document.createElement("div");
+        head.className = "startup-ops-head";
+
+        const link = createTaskLink(item.title, "startup-ops-link");
+        const severity = document.createElement("div");
+        severity.className = "startup-ops-status";
+        severity.textContent = item.severity >= 3 ? "escalate" : item.severity === 2 ? "watch" : "nudge";
+
+        const copy = document.createElement("div");
+        copy.className = "startup-ops-copy";
+        copy.textContent = item.signals.slice(0, 2).map((signal) => signal.text).join(" · ");
+
+        const meta = document.createElement("div");
+        meta.className = "startup-ops-meta";
+        meta.textContent = `next ${item.next}`;
+
+        head.appendChild(link);
+        head.appendChild(severity);
+        row.appendChild(head);
+        row.appendChild(copy);
+        row.appendChild(meta);
+        startupRiskList.appendChild(row);
+      });
+    }
+  }
+  if (startupMeetingSummary) {
+    startupMeetingSummary.textContent = `${getMeetingModeSummary(userId)} ${getFocusModeSummary(userId)}`.trim();
+  }
+  if (startupDecisionList) {
+    startupDecisionList.innerHTML = "";
+
+    const meetingItem = document.createElement("div");
+    meetingItem.className = "startup-ops-item";
+    const meetingTitle = document.createElement("div");
+    meetingTitle.className = "startup-ops-title";
+    meetingTitle.textContent = "meeting mode";
+    const meetingCopy = document.createElement("div");
+    meetingCopy.className = "startup-ops-copy";
+    meetingCopy.textContent = getMeetingModeSummary(userId);
+    meetingItem.appendChild(meetingTitle);
+    meetingItem.appendChild(meetingCopy);
+    startupDecisionList.appendChild(meetingItem);
+
+    const focusItem = document.createElement("div");
+    focusItem.className = "startup-ops-item";
+    const focusTitle = document.createElement("div");
+    focusTitle.className = "startup-ops-title";
+    focusTitle.textContent = "focus mode";
+    const focusCopy = document.createElement("div");
+    focusCopy.className = "startup-ops-copy";
+    focusCopy.textContent = getFocusModeSummary(userId);
+    focusItem.appendChild(focusTitle);
+    focusItem.appendChild(focusCopy);
+    startupDecisionList.appendChild(focusItem);
+
+    decisions.forEach((decision) => {
+      const row = document.createElement("div");
+      row.className = "startup-ops-item";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "startup-ops-title";
+      titleEl.textContent = decision.summary;
+
+      const meta = document.createElement("div");
+      meta.className = "startup-ops-meta";
+      meta.textContent = [decision.taskTitle || "board decision", decision.source, decision.ts ? formatRelativeTime(Date.now() - decision.ts) : ""].filter(Boolean).join(" · ");
+
+      row.appendChild(titleEl);
+      row.appendChild(meta);
+      startupDecisionList.appendChild(row);
+    });
+  }
   if (startupTimelineList) {
     startupTimelineList.innerHTML = "";
     timeline.forEach((item) => {
@@ -5887,6 +6937,18 @@ function renderTaskWorkspace() {
       taskReminderText.textContent = "no follow-up set";
       taskReminderText.classList.remove("is-overdue");
     }
+    if (taskFocusText) {
+      taskFocusText.textContent = "not running";
+    }
+    if (taskRescueText) {
+      taskRescueText.textContent = "no rescue plan yet";
+    }
+    if (taskMeetingText) {
+      taskMeetingText.textContent = "off";
+    }
+    if (taskDecisionList) {
+      taskDecisionList.innerHTML = "";
+    }
     [taskStartNowButton, taskFinishStepButton, taskPauseButton, taskUnblockButton, taskPlanButton, taskRemindLaterButton, taskTomorrowButton, taskDailyFollowupButton, taskClearFollowupButton].forEach((button) => {
       if (button) button.disabled = true;
     });
@@ -5921,6 +6983,9 @@ function renderTaskWorkspace() {
   const workflowStatus = normalizeTaskWorkflowStatus(state.workflowStatus || (state.completed ? "done" : "queued"));
   const progress = getTaskProgressValue(state);
   const nextAction = getTaskNextActionText(state);
+  const operatorState = readOperatorState();
+  const rescue = buildDependencyRescueData(title);
+  const decisions = readDecisionLog().filter((item) => !item.taskTitle || item.taskTitle === title).slice(0, 3);
 
   if (taskPageTitle) {
     taskPageTitle.textContent = title;
@@ -5964,6 +7029,47 @@ function renderTaskWorkspace() {
   if (taskReminderText) {
     taskReminderText.textContent = formatTaskReminderSummary(state);
     taskReminderText.classList.toggle("is-overdue", isTaskReminderOverdue(state));
+  }
+  if (taskFocusText) {
+    taskFocusText.textContent = operatorState.focusTaskTitle === title && operatorState.focusEndsAt > Date.now()
+      ? `locked until ${new Date(operatorState.focusEndsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : operatorState.focusTaskTitle && operatorState.focusEndsAt > Date.now()
+        ? `currently on ${operatorState.focusTaskTitle}`
+        : "not running";
+  }
+  if (taskRescueText) {
+    taskRescueText.textContent = rescue?.actions?.length ? rescue.actions[0] : rescue?.dependencySummary || "no rescue plan yet";
+  }
+  if (taskMeetingText) {
+    taskMeetingText.textContent = operatorState.meetingActive
+      ? `live${operatorState.meetingTopic ? ` · ${operatorState.meetingTopic}` : ""}`
+      : "off";
+  }
+  if (taskDecisionList) {
+    taskDecisionList.innerHTML = "";
+    if (!decisions.length) {
+      const empty = document.createElement("div");
+      empty.className = "task-decision-item";
+      empty.textContent = "no decisions logged for this task yet.";
+      taskDecisionList.appendChild(empty);
+    } else {
+      decisions.forEach((decision) => {
+        const row = document.createElement("div");
+        row.className = "task-decision-item";
+
+        const copy = document.createElement("div");
+        copy.className = "task-decision-copy";
+        copy.textContent = decision.summary;
+
+        const meta = document.createElement("div");
+        meta.className = "task-decision-meta";
+        meta.textContent = [decision.source, decision.ts ? formatRelativeTime(Date.now() - decision.ts) : ""].filter(Boolean).join(" · ");
+
+        row.appendChild(copy);
+        row.appendChild(meta);
+        taskDecisionList.appendChild(row);
+      });
+    }
   }
   if (taskStartNowButton) {
     taskStartNowButton.disabled = state.completed;
@@ -7043,6 +8149,7 @@ async function startStreamingAnnaReply(pendingId) {
     resolvePendingAnna(pendingId, cleanedFinal);
     const createdList = maybeShowListSheetFromAnna(final);
     maybeApplyTaskWorkspaceSuggestionsFromAnna(cleanedFinal);
+    maybeApplyOperatorSuggestionsFromAnna(cleanedFinal);
     if (pendingTodoListGenerationRequest) {
       const shouldRedirect = pendingTodoListRedirectToStartup && createdList && getCurrentPageLabel() === "task";
       setPendingTodoListGeneration(false);
@@ -8146,6 +9253,7 @@ function setSelectedSubscription(value) {
 }
 
 function refreshUiFromStoredState() {
+  maybeRunOperatorAutomation();
   syncAuthIntoProfileFields();
   renderStartupName();
   renderTaskContextBanner();
@@ -8154,6 +9262,22 @@ function refreshUiFromStoredState() {
   setSelectedSubscription(getAccountValue(STORAGE_KEYS.subscription) || "starter");
   renderHistoryModal();
   startWakeWordMonitoring();
+}
+
+function startOperatorAutomationLoop() {
+  if (operatorAutomationTimer) {
+    window.clearInterval(operatorAutomationTimer);
+  }
+  operatorAutomationTimer = window.setInterval(() => {
+    const changed = maybeRunOperatorAutomation();
+    const nudged = runFocusModeDriftCheck();
+    if (changed) {
+      renderStartupDashboard();
+      renderTaskWorkspace();
+    } else if (nudged && getCurrentPageLabel() === "task") {
+      renderTaskWorkspace();
+    }
+  }, 60 * 1000);
 }
 
 async function bootstrapAuthAndState() {
@@ -8466,3 +9590,4 @@ bootstrapAuthAndState().catch((err) => {
 });
 ensureDefaultVoiceSelection();
 startWakeWordMonitoring();
+startOperatorAutomationLoop();
