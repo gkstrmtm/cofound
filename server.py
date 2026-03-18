@@ -457,10 +457,14 @@ def save_state():
 def voices():
     api_key, _source = get_elevenlabs_key()
     if not api_key:
-        return jsonify({
-            "error": "missing elevenlabs api key",
-            "hint": "set ELEVENLABS_API_KEY (or XI_API_KEY) in your environment or .env",
-        }), 500
+        return jsonify(
+            {
+                "voices": [],
+                "available": False,
+                "error": "missing elevenlabs api key",
+                "hint": "set ELEVENLABS_API_KEY (or XI_API_KEY) in your environment or .env",
+            }
+        )
 
     status, data = get_json(
         "https://api.elevenlabs.io/v1/voices",
@@ -471,7 +475,7 @@ def voices():
     )
     if status >= 400:
         detail = data.get("detail") or data.get("error") or data.get("message") or f"http {status}"
-        return jsonify({"error": "elevenlabs request failed", "detail": str(detail)}), 500
+        return jsonify({"voices": [], "available": False, "error": "elevenlabs request failed", "detail": str(detail)})
 
     voices_payload = []
     for voice in data.get("voices") or []:

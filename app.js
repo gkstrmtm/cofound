@@ -1181,7 +1181,9 @@ function captureStructuredActionItem(rawText, fallbackTaskTitle = getCurrentTask
   if (!parsed?.summary) {
     return false;
   }
-  const targetTitle = normalizeTaskTitle(parsed.task || "") || resolveTaskReference(fallbackTaskTitle, getCurrentTaskTitle(), userId);
+  const explicitTaskTitle = normalizeTaskTitle(parsed.task || "");
+  const fallbackTitle = normalizeTaskTitle(fallbackTaskTitle || "");
+  const targetTitle = explicitTaskTitle || (fallbackTitle ? resolveTaskReference(fallbackTitle, fallbackTitle, userId) : "");
   const created = captureVoiceActionItem(parsed.summary, targetTitle || "", userId);
   const effectiveTitle = targetTitle || normalizeTaskTitle(parsed.summary);
   if (!effectiveTitle) {
@@ -2042,7 +2044,7 @@ function maybeHandleLocalVoiceCommand(text) {
     const chunks = brainstormMatch[1].split(/\s*(?:,| and | then )\s*/).map((item) => item.trim()).filter(Boolean);
     let captured = 0;
     chunks.forEach((chunk) => {
-      if (captureStructuredActionItem(chunk, activeTaskTitle || "")) {
+      if (captureStructuredActionItem(chunk, "")) {
         captured += 1;
       }
     });
