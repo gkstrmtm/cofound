@@ -374,6 +374,12 @@ button {
   margin-top: 0.85rem;
 }
 
+.startup-milestone-list {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
 .startup-plan-list {
   display: grid;
   gap: 0.6rem;
@@ -404,6 +410,79 @@ button {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-milestone-item {
+  padding: 0.8rem 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(96, 142, 60, 0.16);
+}
+
+.startup-milestone-item.is-empty {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.startup-milestone-item.is-blocked {
+  border-color: rgba(255, 154, 83, 0.3);
+  background: rgba(255, 154, 83, 0.12);
+}
+
+.startup-milestone-item.is-slipping {
+  border-color: rgba(255, 184, 77, 0.3);
+  background: rgba(255, 184, 77, 0.12);
+}
+
+.startup-milestone-item.is-at-risk {
+  border-color: rgba(202, 176, 73, 0.28);
+  background: rgba(202, 176, 73, 0.1);
+}
+
+.startup-milestone-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.startup-milestone-title {
+  color: var(--olive);
+  font-weight: 800;
+}
+
+.startup-milestone-badge {
+  padding: 0.22rem 0.58rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--olive-deep);
+  background: rgba(126, 178, 88, 0.16);
+}
+
+.startup-milestone-badge.is-blocked {
+  color: #a65020;
+  background: rgba(255, 154, 83, 0.18);
+}
+
+.startup-milestone-badge.is-slipping {
+  color: #9a6612;
+  background: rgba(255, 184, 77, 0.18);
+}
+
+.startup-milestone-badge.is-at-risk {
+  color: #7a6920;
+  background: rgba(202, 176, 73, 0.16);
+}
+
+.startup-milestone-meta,
+.startup-milestone-tasks {
+  margin-top: 0.24rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .startup-plan-item.is-empty {

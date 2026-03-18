@@ -22,6 +22,8 @@ const projectsLeftEl = document.getElementById("projectsLeft");
 const startupBriefingSummary = document.getElementById("startupBriefingSummary");
 const startupBoardAlerts = document.getElementById("startupBoardAlerts");
 const startupFocusList = document.getElementById("startupFocusList");
+const startupMilestoneSummary = document.getElementById("startupMilestoneSummary");
+const startupMilestoneList = document.getElementById("startupMilestoneList");
 const startupTodayPlanSummary = document.getElementById("startupTodayPlanSummary");
 const startupTodayPlanList = document.getElementById("startupTodayPlanList");
 const startupTomorrowPlanSummary = document.getElementById("startupTomorrowPlanSummary");
@@ -1487,6 +1489,7 @@ function maybeHandleLocalVoiceCommand(text) {
   };
   const getTodayPlanCommandReply = () => buildTodayPlanReply();
   const getTomorrowPlanCommandReply = () => buildTomorrowPlanReply();
+  const getMilestoneStatusReply = (target = "") => buildMilestoneStatusReply(target);
 
   if (isCasualGreeting(normalized)) {
     return {
@@ -1914,6 +1917,21 @@ function maybeHandleLocalVoiceCommand(text) {
     return {
       handled: true,
       reply: buildDailyBriefingReply()
+    };
+  }
+
+  const specificMilestoneStatusMatch = normalized.match(/(?:is|what(?:'s| is)|how(?:'s| is))\s+(.+?)\s+milestone\s+(?:status|looking|doing|tracking|on track)/) || normalized.match(/(?:status|health)\s+(?:for|of)\s+(.+?)\s+milestone/);
+  if (specificMilestoneStatusMatch) {
+    return {
+      handled: true,
+      reply: getMilestoneStatusReply(specificMilestoneStatusMatch[1])
+    };
+  }
+
+  if (/(?:milestone status|milestone health|which milestones are slipping|what's slipping|what is slipping|what milestones are off track)/.test(normalized)) {
+    return {
+      handled: true,
+      reply: getMilestoneStatusReply()
     };
   }
 
@@ -3059,6 +3077,143 @@ function buildDailyBriefingReply(userId = getCurrentUserId()) {
   const focusLines = briefing.focus.map((item) => `${item.title} → ${item.next}`).join("; ");
   const alertText = briefing.alerts.length ? ` ${briefing.alerts.join(". ")}.` : "";
   return `${briefing.summary} ${focusLines}.${alertText}`.trim();
+}
+
+function getMilestoneHealthScore(rollup) {
+  let score = 100;
+  score -= rollup.blockedCount * 28;
+  score -= rollup.overdueCount * 24;
+  score -= rollup.unscheduledCount * 10;
+  score -= rollup.unplannedDueSoonCount * 14;
+  score += rollup.scheduledCount * 5;
+  score += rollup.completedCount * 6;
+  score += rollup.activeCount * 4;
+  score += rollup.progressAverage >= 65 ? 6 : 0;
+  return Math.max(0, Math.min(100, score));
+}
+
+function getMilestoneHealthLabel(score, rollup) {
+  if (rollup.blockedCount > 0 || rollup.overdueCount > 0) {
+    return "blocked";
+  }
+  if (score < 55 || rollup.unplannedDueSoonCount > 0) {
+    return "slipping";
+  }
+  if (score < 75 || rollup.unscheduledCount > 1) {
+    return "at risk";
+  }
+  return "on track";
+}
+
+function getMilestoneRollups(userId = getCurrentUserId()) {
+  const entries = getTaskEntriesForUser(userId).filter((entry) => entry?.title && normalizeTaskMilestone(entry?.milestone));
+  const groups = new Map();
+
+  entries.forEach((entry) => {
+    const milestone = normalizeTaskMilestone(entry.milestone);
+    if (!milestone) {
+      return;
+    }
+    if (!groups.has(milestone)) {
+      groups.set(milestone, []);
+    }
+    groups.get(milestone).push(entry);
+  });
+
+  return Array.from(groups.entries())
+    .map(([milestone, items]) => {
+      const openItems = items.filter((entry) => !entry.completed);
+      const completedCount = items.filter((entry) => entry.completed).length;
+      const blockedCount = openItems.filter((entry) => normalizeTaskWorkflowStatus(entry.workflowStatus) === "blocked" || getTaskDependencyState(entry, userId).blocking.length).length;
+      const overdueCount = openItems.filter((entry) => isTaskReminderOverdue(entry) || (Number(entry?.dueAt || 0) && Number(entry.dueAt) < Date.now())).length;
+      const dueSoonCount = openItems.filter((entry) => Number(entry?.dueAt || 0) && Number(entry.dueAt) <= Date.now() + 24 * 60 * 60 * 1000).length;
+      const scheduledCount = openItems.filter((entry) => Number(entry?.scheduledAt || 0) > 0).length;
+      const unscheduledCount = openItems.filter((entry) => !Number(entry?.scheduledAt || 0)).length;
+      const unplannedDueSoonCount = openItems.filter((entry) => Number(entry?.dueAt || 0) && Number(entry.dueAt) <= Date.now() + 24 * 60 * 60 * 1000 && !Number(entry?.scheduledAt || 0)).length;
+      const activeCount = openItems.filter((entry) => normalizeTaskWorkflowStatus(entry.workflowStatus) === "active").length;
+      const progressAverage = openItems.length
+        ? Math.round(openItems.reduce((sum, entry) => sum + getTaskProgressValue(entry), 0) / openItems.length)
+        : 100;
+      const nextDueAt = openItems.reduce((min, entry) => {
+        const dueAt = Number(entry?.dueAt || 0) || 0;
+        return dueAt && (!min || dueAt < min) ? dueAt : min;
+      }, 0);
+      const topTasks = [...openItems]
+        .sort((a, b) => getTaskBoardRank(b, userId) - getTaskBoardRank(a, userId))
+        .slice(0, 3)
+        .map((entry) => entry.title);
+
+      const rollup = {
+        milestone,
+        totalCount: items.length,
+        openCount: openItems.length,
+        completedCount,
+        blockedCount,
+        overdueCount,
+        dueSoonCount,
+        scheduledCount,
+        unscheduledCount,
+        unplannedDueSoonCount,
+        activeCount,
+        progressAverage,
+        nextDueAt,
+        topTasks
+      };
+
+      const score = getMilestoneHealthScore(rollup);
+      const health = getMilestoneHealthLabel(score, rollup);
+      return {
+        ...rollup,
+        score,
+        health,
+        dueLabel: nextDueAt ? formatTaskDueLabel(nextDueAt, "") : "",
+        summaryParts: [
+          `${completedCount}/${items.length} done`,
+          `${progressAverage}% avg progress`,
+          blockedCount ? `${blockedCount} blocked` : "",
+          overdueCount ? `${overdueCount} overdue` : "",
+          unscheduledCount ? `${unscheduledCount} unscheduled` : "",
+          nextDueAt ? `next due ${formatTaskDueLabel(nextDueAt, "")}` : ""
+        ].filter(Boolean)
+      };
+    })
+    .sort((a, b) => a.score - b.score || a.milestone.localeCompare(b.milestone));
+}
+
+function getMilestoneStatusData(userId = getCurrentUserId()) {
+  const rollups = getMilestoneRollups(userId);
+  const slipping = rollups.filter((item) => item.health === "slipping" || item.health === "blocked");
+  const summary = !rollups.length
+    ? "no milestones yet — assign tasks to a milestone and anna will track it."
+    : slipping.length
+      ? `${slipping.length} milestone${slipping.length === 1 ? " is" : "s are"} off track.`
+      : `all ${rollups.length} milestone${rollups.length === 1 ? " is" : "s are"} on track or manageable.`;
+
+  return {
+    summary,
+    rollups,
+    slipping: slipping.map((item) => item.milestone)
+  };
+}
+
+function buildMilestoneStatusReply(targetMilestone = "", userId = getCurrentUserId()) {
+  const normalizedTarget = normalizeTaskMilestone(targetMilestone);
+  const data = getMilestoneStatusData(userId);
+  if (!data.rollups.length) {
+    return data.summary;
+  }
+
+  if (normalizedTarget) {
+    const match = data.rollups.find((item) => item.milestone === normalizedTarget || item.milestone.includes(normalizedTarget));
+    if (!match) {
+      return `i can't find a ${normalizedTarget} milestone yet.`;
+    }
+    const topText = match.topTasks.length ? ` top tasks: ${match.topTasks.join(", ")}.` : "";
+    return `${match.milestone} is ${match.health}. ${match.summaryParts.slice(0, 4).join(" · ")}.${topText}`.trim();
+  }
+
+  const lead = data.rollups.slice(0, 3).map((item) => `${item.milestone} ${item.health}`).join("; ");
+  return `${data.summary} ${lead}.`.trim();
 }
 
 function getTodayStartTimestamp() {
@@ -4693,6 +4848,7 @@ function buildMessagesForApi() {
     .join("\n");
   const taskBoardContext = buildTaskBoardContext(currentUserId, 18);
   const dailyBriefingSummary = buildDailyBriefingReply(currentUserId);
+  const milestoneSummary = buildMilestoneStatusReply("", currentUserId);
   const todayPlanSummary = buildTodayPlanReply(currentUserId);
   const tomorrowPlanSummary = buildTomorrowPlanReply(currentUserId);
   const standupSummary = buildBoardStandupReply(currentUserId);
@@ -4762,6 +4918,9 @@ function buildMessagesForApi() {
   }
   if (dailyBriefingSummary) {
     sysParts.push(`daily board briefing: ${dailyBriefingSummary}`);
+  }
+  if (milestoneSummary) {
+    sysParts.push(`milestone health: ${milestoneSummary}`);
   }
   if (todayPlanSummary) {
     sysParts.push(`today plan: ${todayPlanSummary}`);
@@ -5163,7 +5322,7 @@ function persistStartupList(extracted) {
 }
 
 function renderStartupDashboard() {
-  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary) {
+  if (!startupTasksEl && !projectsLeftEl && !lastUpdatedEl && !startupBriefingSummary && !startupMilestoneSummary && !startupStandupSummary && !startupTodayPlanSummary && !startupTomorrowPlanSummary) {
     return;
   }
 
@@ -5172,6 +5331,7 @@ function renderStartupDashboard() {
   const items = latest && Array.isArray(latest.items) ? latest.items : [];
   const remainingCount = items.filter((item) => !readTaskEntry(item, userId).completed).length;
   const briefing = getDailyBriefingData(userId);
+  const milestoneStatus = getMilestoneStatusData(userId);
   const todayPlan = getTodayPlanData(userId);
   const tomorrowPlan = getTomorrowPlanData(userId);
   const standup = getBoardStandupData(userId);
@@ -5226,6 +5386,50 @@ function renderStartupDashboard() {
 
       startupFocusList.appendChild(card);
     });
+  }
+  if (startupMilestoneSummary) {
+    startupMilestoneSummary.textContent = milestoneStatus.summary;
+  }
+  if (startupMilestoneList) {
+    startupMilestoneList.innerHTML = "";
+    if (!milestoneStatus.rollups.length) {
+      const empty = document.createElement("div");
+      empty.className = "startup-milestone-item is-empty";
+      empty.textContent = "no milestone groups yet — assign tasks into a milestone to see health here.";
+      startupMilestoneList.appendChild(empty);
+    } else {
+      milestoneStatus.rollups.slice(0, 4).forEach((item) => {
+        const row = document.createElement("div");
+        row.className = `startup-milestone-item is-${item.health.replace(/\s+/g, "-")}`;
+
+        const head = document.createElement("div");
+        head.className = "startup-milestone-head";
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "startup-milestone-title";
+        titleEl.textContent = item.milestone;
+
+        const badge = document.createElement("div");
+        badge.className = `startup-milestone-badge is-${item.health.replace(/\s+/g, "-")}`;
+        badge.textContent = item.health;
+
+        head.appendChild(titleEl);
+        head.appendChild(badge);
+
+        const metaEl = document.createElement("div");
+        metaEl.className = "startup-milestone-meta";
+        metaEl.textContent = item.summaryParts.slice(0, 4).join(" · ");
+
+        const tasksEl = document.createElement("div");
+        tasksEl.className = "startup-milestone-tasks";
+        tasksEl.textContent = item.topTasks.length ? `top tasks: ${item.topTasks.join(" · ")}` : "no open tasks";
+
+        row.appendChild(head);
+        row.appendChild(metaEl);
+        row.appendChild(tasksEl);
+        startupMilestoneList.appendChild(row);
+      });
+    }
   }
   if (startupStandupSummary) {
     startupStandupSummary.textContent = buildBoardStandupReply(userId);
